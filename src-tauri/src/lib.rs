@@ -45,6 +45,9 @@ pub fn run() {
             run_script,
             load_scripts,
             save_scripts,
+            sync_scheduled_task,
+            delete_scheduled_task,
+            get_task_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
