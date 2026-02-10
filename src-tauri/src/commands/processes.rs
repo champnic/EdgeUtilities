@@ -91,6 +91,11 @@ pub fn get_edge_processes() -> Result<Vec<ProcessGroup>, String> {
         groups.entry(group_pid).or_default().push(proc.clone());
     }
 
+    // Try to enrich renderer processes with URLs via Chrome DevTools Protocol
+    for processes in groups.values_mut() {
+        enrich_with_cdp(processes);
+    }
+
     let mut result: Vec<ProcessGroup> = groups
         .into_iter()
         .map(|(browser_pid, mut processes)| {
@@ -266,6 +271,10 @@ fn extract_url(cmd_args: &[String]) -> String {
         if arg.starts_with("http://") || arg.starts_with("https://") {
             return arg.clone();
         }
+        // PWA apps launched with --app=URL
+        if let Some(url) = arg.strip_prefix("--app=") {
+            return url.to_string();
+        }
     }
     String::new()
 }
@@ -341,4 +350,195 @@ fn find_root_ancestor(
         }
     }
     current
+}
+
+/// Extract debugging port from browser process command line
+fn extract_debugging_port(cmd_args: &[String]) -> Option<u16> {
+    for arg in cmd_args {
+        if let Some(port_str) = arg.strip_prefix("--remote-debugging-port=") {
+            if let Ok(port) = port_str.parse::<u16>() {
+                if port > 0 {
+                    return Some(port);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Extract user data dir from command line args
+fn extract_user_data_dir(cmd_args: &[String]) -> Option<String> {
+    for arg in cmd_args {
+        if let Some(dir) = arg.strip_prefix("--user-data-dir=") {
+            return Some(dir.trim_matches('"').to_string());
+        }
+    }
+    None
+}
+
+/// Try to read DevToolsActivePort file to get debugging port
+fn read_devtools_active_port(user_data_dir: &str) -> Option<u16> {
+    let path = std::path::Path::new(user_data_dir).join("DevToolsActivePort");
+    if let Ok(contents) = std::fs::read_to_string(&path) {
+        if let Some(first_line) = contents.lines().next() {
+            if let Ok(port) = first_line.trim().parse::<u16>() {
+                return Some(port);
+            }
+        }
+    }
+    None
+}
+
+#[derive(Debug, Deserialize)]
+struct CdpTarget {
+    title: Option<String>,
+    url: Option<String>,
+    #[serde(rename = "type")]
+    target_type: Option<String>,
+    #[serde(rename = "processId")]
+    process_id: Option<u32>,
+}
+
+/// Dechunk HTTP chunked transfer encoding
+fn dechunk_body(body: &str) -> String {
+    let mut result = String::new();
+    let mut remaining = body;
+    loop {
+        let line_end = match remaining.find("\r\n") {
+            Some(pos) => pos,
+            None => break,
+        };
+        let size_str = remaining[..line_end].trim();
+        let chunk_size = match usize::from_str_radix(size_str, 16) {
+            Ok(0) => break,
+            Ok(s) => s,
+            Err(_) => break,
+        };
+        remaining = &remaining[line_end + 2..];
+        let chunk_end = chunk_size.min(remaining.len());
+        result.push_str(&remaining[..chunk_end]);
+        remaining = &remaining[chunk_end..];
+        if remaining.starts_with("\r\n") {
+            remaining = &remaining[2..];
+        }
+    }
+    result
+}
+
+/// Fetch CDP targets from a Chrome DevTools Protocol debugging port
+fn fetch_cdp_targets(port: u16) -> Vec<CdpTarget> {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let addr = format!("127.0.0.1:{}", port);
+    let sock_addr: std::net::SocketAddr = match addr.parse() {
+        Ok(a) => a,
+        Err(_) => return vec![],
+    };
+
+    let mut stream = match TcpStream::connect_timeout(&sock_addr, Duration::from_millis(300)) {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+    stream.set_write_timeout(Some(Duration::from_millis(500))).ok();
+
+    let request = format!(
+        "GET /json HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+        port
+    );
+
+    if stream.write_all(request.as_bytes()).is_err() {
+        return vec![];
+    }
+
+    let mut response = Vec::new();
+    let _ = stream.read_to_end(&mut response);
+    let response_str = String::from_utf8_lossy(&response);
+
+    // Separate headers from body
+    let body = match response_str.find("\r\n\r\n") {
+        Some(pos) => {
+            let headers = &response_str[..pos];
+            let raw_body = &response_str[pos + 4..];
+            if headers.to_lowercase().contains("transfer-encoding: chunked") {
+                dechunk_body(raw_body)
+            } else {
+                raw_body.to_string()
+            }
+        }
+        None => return vec![],
+    };
+
+    // Find JSON array in body
+    let json_str = match (body.find('['), body.rfind(']')) {
+        (Some(start), Some(end)) if start < end => &body[start..=end],
+        _ => return vec![],
+    };
+
+    serde_json::from_str(json_str).unwrap_or_default()
+}
+
+/// Try to enrich renderer processes with URLs via Chrome DevTools Protocol.
+/// This works when Edge is started with --remote-debugging-port=PORT.
+/// The Edge Process Viewer in src3 uses internal Mojo IPC to the browser's
+/// Task Manager for URL extraction, which is not available from external apps.
+fn enrich_with_cdp(processes: &mut Vec<ProcessInfo>) {
+    // Find browser process command line
+    let browser_args = match processes.iter().find(|p| p.process_type == "Browser") {
+        Some(bp) => bp.cmd_args.clone(),
+        None => return,
+    };
+
+    // Try to get debugging port from command line
+    let mut port = extract_debugging_port(&browser_args);
+
+    // Try DevToolsActivePort file
+    if port.is_none() {
+        if let Some(user_data_dir) = extract_user_data_dir(&browser_args) {
+            port = read_devtools_active_port(&user_data_dir);
+        }
+    }
+
+    let port = match port {
+        Some(p) => p,
+        None => return,
+    };
+
+    let targets = fetch_cdp_targets(port);
+
+    for target in &targets {
+        let url = match &target.url {
+            Some(u) if !u.is_empty() && u != "about:blank" && !u.starts_with("devtools://") => u,
+            _ => continue,
+        };
+
+        // Only map page/iframe targets
+        let is_page = target
+            .target_type
+            .as_deref()
+            .map_or(true, |t| t == "page" || t == "iframe" || t == "other");
+        if !is_page {
+            continue;
+        }
+
+        let title = target.title.as_deref().unwrap_or("");
+        let display = if !title.is_empty() && title != url.as_str() {
+            format!("{} \u{2014} {}", title, url)
+        } else {
+            url.clone()
+        };
+
+        // Map by process ID if available from CDP
+        if let Some(target_pid) = target.process_id {
+            if let Some(proc) = processes
+                .iter_mut()
+                .find(|p| p.pid == target_pid && p.url.is_empty())
+            {
+                proc.url = display;
+            }
+        }
+    }
 }

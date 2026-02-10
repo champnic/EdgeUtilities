@@ -38,6 +38,7 @@ pub fn run() {
             run_gclient_sync,
             create_out_dir,
             start_build,
+            delete_out_dir,
             read_args_gn,
             load_repo_list,
             save_repo_list,

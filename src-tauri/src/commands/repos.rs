@@ -131,7 +131,7 @@ pub fn create_out_dir(repo_path: String, config_name: String, out_path: String) 
     }
 }
 
-/// Start a build using autoninja
+/// Start a build using autoninja (initializes Edge dev env first)
 #[tauri::command]
 pub async fn start_build(
     repo_path: String,
@@ -149,22 +149,78 @@ pub async fn start_build(
         "autoninja".to_string()
     };
 
-    let output = tokio::process::Command::new(&autoninja_path)
-        .args(["-C", &out_dir, &target])
-        .current_dir(&src_path)
-        .env("PATH", prepend_to_path(&depot_tools))
-        .output()
-        .await
-        .map_err(|e| format!("Failed to start build: {}", e))?;
+    // Build the init script command to set up the Edge dev environment first
+    let init_script = depot_tools.join("scripts").join("setup").join("initEdgeEnv.cmd");
+    let edge_root = depot_tools.parent()
+        .ok_or("Could not determine Edge root directory")?;
+    let src_folder = src_path.file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| "src".to_string());
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let comspec = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
 
-    if output.status.success() {
-        Ok(format!("Build succeeded:\n{}", stdout))
+    // If initEdgeEnv.cmd exists, run it first to set up build tools, then autoninja
+    if init_script.exists() {
+        let mut init_cmd = format!(
+            "call \"{}\" \"{}\"",
+            init_script.to_string_lossy(),
+            edge_root.to_string_lossy()
+        );
+        if src_folder != "src" {
+            init_cmd.push_str(&format!(" --SrcFolder {}", src_folder));
+        }
+
+        let full_cmd = format!(
+            "{} && call \"{}\" -C \"{}\" {}",
+            init_cmd, autoninja_path, out_dir, target
+        );
+
+        let output = tokio::process::Command::new(&comspec)
+            .args(["/c", &full_cmd])
+            .current_dir(&src_path)
+            .output()
+            .await
+            .map_err(|e| format!("Failed to start build: {}", e))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        if output.status.success() {
+            Ok(format!("Build succeeded:\n{}", stdout))
+        } else {
+            Err(format!("Build failed:\n{}\n{}", stdout, stderr))
+        }
     } else {
-        Err(format!("Build failed:\n{}\n{}", stdout, stderr))
+        // Fallback: run autoninja directly without init script
+        let output = tokio::process::Command::new(&autoninja_path)
+            .args(["-C", &out_dir, &target])
+            .current_dir(&src_path)
+            .env("PATH", prepend_to_path(&depot_tools))
+            .output()
+            .await
+            .map_err(|e| format!("Failed to start build: {}", e))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        if output.status.success() {
+            Ok(format!("Build succeeded:\n{}", stdout))
+        } else {
+            Err(format!("Build failed:\n{}\n{}", stdout, stderr))
+        }
     }
+}
+
+/// Delete an out directory
+#[tauri::command]
+pub fn delete_out_dir(out_dir_path: String) -> Result<String, String> {
+    let path = PathBuf::from(&out_dir_path);
+    if !path.exists() {
+        return Err("Directory not found".to_string());
+    }
+    std::fs::remove_dir_all(&path)
+        .map_err(|e| format!("Failed to delete {}: {}", path.display(), e))?;
+    Ok(format!("Deleted {}", path.display()))
 }
 
 /// Read args.gn for a given out directory

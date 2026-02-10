@@ -49,6 +49,7 @@ interface RepoState {
   error: string;
   loadingMsg: string;
   fullLoaded: boolean;
+  commitsExpanded: boolean;
 }
 
 export default function ReposTab() {
@@ -56,14 +57,15 @@ export default function ReposTab() {
   const [repoStates, setRepoStates] = useState<Map<string, RepoState>>(new Map());
   const [newRepoPath, setNewRepoPath] = useState("");
   const [buildTargets, setBuildTargets] = useState<string[]>([]);
-  const [selectedOutDir, setSelectedOutDir] = useState("");
-  const [selectedTarget, setSelectedTarget] = useState("chrome");
-  const [customTarget, setCustomTarget] = useState("");
-  const [building, setBuilding] = useState(false);
-  const [buildOutput, setBuildOutput] = useState("");
-  const [buildRepoPath, setBuildRepoPath] = useState("");
-  const [argsGn, setArgsGn] = useState<string | null>(null);
-  const [showArgsGn, setShowArgsGn] = useState(false);
+  const [buildState, setBuildState] = useState<{
+    repoPath: string;
+    outDirPath: string;
+    selectedTarget: string;
+    customTarget: string;
+    building: boolean;
+    output: string;
+  } | null>(null);
+  const [argsGnView, setArgsGnView] = useState<{ repoPath: string; outDirPath: string; content: string } | null>(null);
   const [statusMsg, setStatusMsg] = useState("");
   const [newOutConfig, setNewOutConfig] = useState("win_x64_debug_developer_build");
   const [newOutPath, setNewOutPath] = useState("");
@@ -106,6 +108,7 @@ export default function ReposTab() {
         error: "",
         loadingMsg: "Fetching branch...",
         fullLoaded: false,
+        commitsExpanded: existing?.commitsExpanded ?? false,
       });
       return next;
     });
@@ -123,6 +126,7 @@ export default function ReposTab() {
           error: "",
           loadingMsg: "",
           fullLoaded: false,
+          commitsExpanded: existing?.commitsExpanded ?? false,
         });
         return next;
       });
@@ -137,6 +141,7 @@ export default function ReposTab() {
           error: `${err}`,
           loadingMsg: "",
           fullLoaded: false,
+          commitsExpanded: false,
         });
         return next;
       });
@@ -165,6 +170,7 @@ export default function ReposTab() {
           error: "",
           loadingMsg: "",
           fullLoaded: true,
+          commitsExpanded: false,
         });
         return next;
       });
@@ -180,6 +186,7 @@ export default function ReposTab() {
           error: `${err}`,
           loadingMsg: "",
           fullLoaded: false,
+          commitsExpanded: existing?.commitsExpanded ?? false,
         });
         return next;
       });
@@ -280,26 +287,39 @@ export default function ReposTab() {
     } catch {}
   }
 
-  async function handleBuild(repoPath: string) {
-    const target = customTarget || selectedTarget;
-    if (!selectedOutDir || !target) {
-      setStatusMsg("Select an out directory and build target");
+  function toggleBuildPanel(repoPath: string, outDirPath: string) {
+    if (buildState?.outDirPath === outDirPath) {
+      setBuildState(null);
+    } else {
+      setBuildState({
+        repoPath,
+        outDirPath,
+        selectedTarget: "chrome",
+        customTarget: "",
+        building: false,
+        output: "",
+      });
+    }
+  }
+
+  async function handleBuild() {
+    if (!buildState) return;
+    const target = buildState.customTarget || buildState.selectedTarget;
+    if (!target) {
+      setStatusMsg("Select a build target");
       return;
     }
-    setBuilding(true);
-    setBuildOutput("");
-    setBuildRepoPath(repoPath);
+    setBuildState((prev) => prev ? { ...prev, building: true, output: "" } : prev);
     try {
       const result = await invoke<string>("start_build", {
-        repoPath,
-        outDir: selectedOutDir,
+        repoPath: buildState.repoPath,
+        outDir: buildState.outDirPath,
         target,
       });
-      setBuildOutput(result);
+      setBuildState((prev) => prev ? { ...prev, building: false, output: result } : prev);
     } catch (err) {
-      setBuildOutput(`Build failed:\n${err}`);
+      setBuildState((prev) => prev ? { ...prev, building: false, output: `Build failed:\n${err}` } : prev);
     }
-    setBuilding(false);
   }
 
   async function handleCreateOutDir(repoPath: string) {
@@ -323,11 +343,14 @@ export default function ReposTab() {
     setCreatingOutDir(false);
   }
 
-  async function viewArgsGn(outDirPath: string) {
+  async function viewArgsGn(repoPath: string, outDirPath: string) {
+    if (argsGnView?.outDirPath === outDirPath) {
+      setArgsGnView(null);
+      return;
+    }
     try {
       const content = await invoke<string>("read_args_gn", { outDirPath });
-      setArgsGn(content);
-      setShowArgsGn(true);
+      setArgsGnView({ repoPath, outDirPath, content });
     } catch (err) {
       setStatusMsg(`Error: ${err}`);
     }
@@ -385,6 +408,7 @@ export default function ReposTab() {
           error: "",
           loadingMsg: "",
           fullLoaded: false,
+          commitsExpanded: false,
         };
 
         return (
@@ -506,22 +530,122 @@ export default function ReposTab() {
                                     {dir.has_args_gn ? "Yes" : "No"}
                                   </span>
                                 </td>
-                                <td>
+                                <td style={{ whiteSpace: "nowrap" }}>
                                   {dir.has_args_gn && (
                                     <Button
                                       appearance="subtle"
                                       icon={<DocumentTextFilled />}
                                       size="small"
-                                      onClick={() => viewArgsGn(dir.path)}
+                                      onClick={() => viewArgsGn(repoPath, dir.path)}
                                     >
                                       args.gn
                                     </Button>
                                   )}
+                                  <Button
+                                    appearance={buildState?.outDirPath === dir.path ? "primary" : "subtle"}
+                                    icon={<BuildingFilled />}
+                                    size="small"
+                                    onClick={() => toggleBuildPanel(repoPath, dir.path)}
+                                    title="Build this out dir"
+                                  >
+                                    Build
+                                  </Button>
+                                  <Button
+                                    appearance="subtle"
+                                    icon={<DeleteFilled />}
+                                    size="small"
+                                    onClick={async () => {
+                                      if (!confirm(`Delete out folder "${dir.name}"? This cannot be undone.`)) return;
+                                      try {
+                                        const result = await invoke<string>("delete_out_dir", { outDirPath: dir.path });
+                                        setStatusMsg(result);
+                                        loadFullRepoInfo(repoPath);
+                                      } catch (err) {
+                                        setStatusMsg(`Error: ${err}`);
+                                      }
+                                    }}
+                                    title="Delete out folder"
+                                  />
                                 </td>
                               </tr>
                             ))}
                           </tbody>
                         </table>
+                      )}
+
+                      {argsGnView && argsGnView.repoPath === repoPath && (
+                        <div style={{ marginTop: 8, background: "rgba(0,0,0,0.15)", borderRadius: 6, padding: 12 }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                            <span style={{ fontSize: 12, fontFamily: "monospace", color: "var(--text-secondary)" }}>
+                              args.gn — {argsGnView.outDirPath.split(/[/\\]/).pop()}
+                            </span>
+                            <Button appearance="subtle" size="small" onClick={() => setArgsGnView(null)}>
+                              Close
+                            </Button>
+                          </div>
+                          <Textarea
+                            value={argsGnView.content}
+                            readOnly
+                            style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }}
+                            rows={12}
+                          />
+                        </div>
+                      )}
+
+                      {buildState && buildState.repoPath === repoPath && (
+                        <div style={{ marginTop: 8, background: "rgba(0,0,0,0.15)", borderRadius: 6, padding: 12 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                            <span style={{ fontSize: 12, fontFamily: "monospace", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
+                              Build: {buildState.outDirPath.split(/[/\\]/).pop()}
+                            </span>
+                            <span style={{ fontSize: 12, color: "var(--text-secondary)", whiteSpace: "nowrap" }}>Target:</span>
+                            <Select
+                              value={buildState.selectedTarget}
+                              onChange={(_e, data) => setBuildState((prev) => prev ? { ...prev, selectedTarget: data.value } : prev)}
+                              size="small"
+                              style={{ minWidth: 140 }}
+                            >
+                              {buildTargets.map((target, i) => (
+                                <option key={i} value={target}>{target}</option>
+                              ))}
+                              <option value="">Custom...</option>
+                            </Select>
+                            {buildState.selectedTarget === "" && (
+                              <Input
+                                value={buildState.customTarget}
+                                onChange={(_e, data) => setBuildState((prev) => prev ? { ...prev, customTarget: data.value } : prev)}
+                                placeholder="Custom target"
+                                size="small"
+                                style={{ flex: 1 }}
+                              />
+                            )}
+                            <Button
+                              appearance="primary"
+                              icon={<BuildingFilled />}
+                              size="small"
+                              onClick={handleBuild}
+                              disabled={buildState.building}
+                            >
+                              {buildState.building ? "Building..." : "Build"}
+                            </Button>
+                            <Button appearance="subtle" size="small" onClick={() => setBuildState(null)}>
+                              Close
+                            </Button>
+                          </div>
+
+                          {buildState.building && (
+                            <div className="loading" style={{ padding: 8 }}>
+                              <Spinner size="tiny" />
+                              <span style={{ fontSize: 12 }}>Building {buildState.customTarget || buildState.selectedTarget}...</span>
+                            </div>
+                          )}
+
+                          {buildState.output && (
+                            <div className="terminal-output" style={{ marginTop: 8, maxHeight: 200 }}>
+                              {buildState.output}
+                            </div>
+                          )}
+                        </div>
                       )}
 
                       <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
@@ -579,88 +703,37 @@ export default function ReposTab() {
                       </div>
                     </div>
 
-                    {/* Build */}
-                    <div style={{ marginBottom: 16 }}>
-                      <h4 style={{ fontSize: 13, marginBottom: 8, color: "var(--text-secondary)" }}>
-                        Build
-                      </h4>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <Select
-                          value={selectedOutDir}
-                          onChange={(_e, data) => setSelectedOutDir(data.value)}
-                          size="small"
-                          style={{ minWidth: 180 }}
-                        >
-                          <option value="">Select out dir...</option>
-                          {state.info.out_dirs.map((dir, i) => (
-                            <option key={i} value={dir.path}>
-                              {dir.name}
-                            </option>
-                          ))}
-                        </Select>
-                        <Select
-                          value={selectedTarget}
-                          onChange={(_e, data) => setSelectedTarget(data.value)}
-                          size="small"
-                          style={{ minWidth: 160 }}
-                        >
-                          {buildTargets.map((target, i) => (
-                            <option key={i} value={target}>
-                              {target}
-                            </option>
-                          ))}
-                          <option value="">Custom...</option>
-                        </Select>
-                        {selectedTarget === "" && (
-                          <Input
-                            value={customTarget}
-                            onChange={(_e, data) => setCustomTarget(data.value)}
-                            placeholder="Custom target"
-                            size="small"
-                            style={{ flex: 1 }}
-                          />
-                        )}
-                        <Button
-                          appearance="primary"
-                          icon={<BuildingFilled />}
-                          size="small"
-                          onClick={() => handleBuild(repoPath)}
-                          disabled={building || !selectedOutDir}
-                        >
-                          {building && buildRepoPath === repoPath ? "Building..." : "Build"}
-                        </Button>
-                      </div>
-
-                      {building && buildRepoPath === repoPath && (
-                        <div className="loading" style={{ padding: 8 }}>
-                          <Spinner size="tiny" />
-                          <span style={{ fontSize: 12 }}>Building {customTarget || selectedTarget}...</span>
-                        </div>
-                      )}
-
-                      {buildOutput && buildRepoPath === repoPath && (
-                        <div className="terminal-output" style={{ marginTop: 8, maxHeight: 200 }}>
-                          {buildOutput}
-                        </div>
-                      )}
-                    </div>
-
                     {/* Recent Commits */}
                     <div>
-                      <h4 style={{ fontSize: 13, marginBottom: 8, color: "var(--text-secondary)" }}>
+                      <h4
+                        style={{ fontSize: 13, marginBottom: 8, color: "var(--text-secondary)", cursor: "pointer", userSelect: "none", display: "flex", alignItems: "center", gap: 4 }}
+                        onClick={() => {
+                          setRepoStates((prev) => {
+                            const next = new Map(prev);
+                            const s = next.get(repoPath);
+                            if (s) next.set(repoPath, { ...s, commitsExpanded: !s.commitsExpanded });
+                            return next;
+                          });
+                        }}
+                      >
+                        <span style={{ fontSize: 12 }}>
+                          {state.commitsExpanded ? <ChevronDownFilled /> : <ChevronRightFilled />}
+                        </span>
                         Recent Commits
                       </h4>
-                      <ul className="commit-list">
-                        {state.info.recent_commits.map((commit, i) => (
-                          <li key={i}>
-                            <span className="hash">{commit.short_hash}</span>
-                            <span className="date">{commit.date}</span>
-                            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                              {commit.subject}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
+                      {state.commitsExpanded && (
+                        <ul className="commit-list">
+                          {state.info.recent_commits.map((commit, i) => (
+                            <li key={i}>
+                              <span className="hash">{commit.short_hash}</span>
+                              <span className="date">{commit.date}</span>
+                              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {commit.subject}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </div>
                   </>
                 )}
@@ -670,27 +743,6 @@ export default function ReposTab() {
         );
       })}
 
-      {/* Args.gn viewer */}
-      {showArgsGn && argsGn !== null && (
-        <div className="card">
-          <div className="card-header">
-            <h3>args.gn</h3>
-            <Button
-              appearance="subtle"
-              size="small"
-              onClick={() => setShowArgsGn(false)}
-            >
-              Close
-            </Button>
-          </div>
-          <Textarea
-            value={argsGn}
-            readOnly
-            style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }}
-            rows={15}
-          />
-        </div>
-      )}
     </div>
   );
 }
