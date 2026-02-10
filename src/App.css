@@ -1,0 +1,287 @@
+:root {
+  --bg-primary: #1a1a2e;
+  --bg-secondary: #16213e;
+  --bg-card: #0f3460;
+  --text-primary: #e4e4e4;
+  --text-secondary: #a4a4a4;
+  --accent: #0078d4;
+  --accent-hover: #1a8cff;
+  --danger: #d32f2f;
+  --success: #2e7d32;
+  --warning: #f57c00;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+}
+
+.app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Removed app-header - title is in the window title bar */
+
+.tab-content {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+}
+
+/* Data table styles */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.data-table th {
+  text-align: left;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+}
+
+.data-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  vertical-align: middle;
+}
+
+.data-table tr:hover td {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* Card */
+.card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.card-header h3 {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* Section heading */
+.section-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--text-primary);
+}
+
+/* Status badge */
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.badge.stable { background: #0078d4; }
+.badge.beta { background: #6b4fbb; }
+.badge.dev { background: #e67e22; }
+.badge.canary { background: #e74c3c; }
+.badge.local-build { background: #16a085; }
+.badge.browser { background: #27ae60; }
+.badge.renderer { background: #2980b9; }
+.badge.gpu { background: #8e44ad; }
+.badge.utility { background: #7f8c8d; }
+.badge.crashpad { background: #95a5a6; }
+.badge.webview2 { background: #00bcd4; }
+.badge.copilot { background: #9b59b6; }
+.badge.success { background: var(--success); }
+.badge.error { background: var(--danger); }
+
+/* Process tree */
+.process-group {
+  margin-bottom: 16px;
+}
+
+.process-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(0, 120, 212, 0.1);
+  border-radius: 6px 6px 0 0;
+  border: 1px solid rgba(0, 120, 212, 0.2);
+  border-bottom: none;
+}
+
+/* Terminal output */
+.terminal-output {
+  background: #0c0c0c;
+  color: #cccccc;
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 12px;
+  padding: 12px;
+  border-radius: 6px;
+  max-height: 400px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.terminal-output .error {
+  color: #f44336;
+}
+
+/* Toolbar */
+.toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+/* Flag chips */
+.flag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: rgba(0, 120, 212, 0.15);
+  border: 1px solid rgba(0, 120, 212, 0.3);
+  border-radius: 16px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  user-select: none;
+}
+
+.flag-chip:hover {
+  background: rgba(0, 120, 212, 0.25);
+}
+
+.flag-chip.selected {
+  background: rgba(0, 120, 212, 0.4);
+  border-color: var(--accent);
+}
+
+.flag-chip .remove {
+  font-size: 14px;
+  opacity: 0.6;
+  cursor: pointer;
+}
+
+.flag-chip .remove:hover {
+  opacity: 1;
+}
+
+/* Commit list */
+.commit-list {
+  list-style: none;
+  font-size: 12px;
+}
+
+.commit-list li {
+  padding: 4px 0;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.commit-list .hash {
+  color: var(--accent);
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.commit-list .date {
+  color: var(--text-secondary);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* Empty state */
+.empty-state {
+  text-align: center;
+  padding: 48px;
+  color: var(--text-secondary);
+}
+
+.empty-state .icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+  opacity: 0.3;
+}
+
+/* Loading spinner */
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: var(--text-secondary);
+  gap: 8px;
+}
+
+.spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
