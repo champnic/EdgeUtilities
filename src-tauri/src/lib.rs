@@ -23,6 +23,8 @@ pub fn run() {
             get_edge_processes,
             terminate_process,
             debug_process,
+            get_cdp_debug_info,
+            get_cdp_urls,
             // Launcher
             launch_edge,
             get_common_flags,

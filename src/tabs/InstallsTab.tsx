@@ -38,6 +38,8 @@ interface MiniInstaller {
   modified: string;
 }
 
+const STORAGE_KEY_REMOTE_DEBUG = "edge-utils-launcher-remote-debug";
+
 export default function InstallsTab() {
   const [installs, setInstalls] = useState<EdgeInstall[]>([]);
   const [installers, setInstallers] = useState<MiniInstaller[]>([]);
@@ -66,7 +68,9 @@ export default function InstallsTab() {
 
   async function handleLaunch(exePath: string) {
     try {
-      await invoke("launch_edge", { exePath, flags: [] });
+      const remoteDebug = localStorage.getItem(STORAGE_KEY_REMOTE_DEBUG) !== "false";
+      const flags = remoteDebug ? ["--remote-debugging-port=9222"] : [];
+      await invoke("launch_edge", { exePath, flags });
       setStatusMsg("Edge launched");
     } catch (err) {
       setStatusMsg(`Error: ${err}`);

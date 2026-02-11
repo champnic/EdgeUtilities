@@ -17,6 +17,7 @@ interface ProcessInfo {
   memory_mb: number;
   cpu_percent: number;
   url: string;
+  cdp_target_type: string;
   instance_type: string;
 }
 
@@ -31,6 +32,21 @@ interface ProcessGroup {
 
 const STORAGE_KEY_AUTO_REFRESH = "edge-utils-processes-auto-refresh";
 const STORAGE_KEY_HIDDEN_TYPES = "edge-utils-processes-hidden-types";
+const STORAGE_KEY_SHOW_ARGS = "edge-utils-processes-show-args";
+
+function getProcessDetail(proc: ProcessInfo): string {
+  if (proc.url) return proc.url;
+  if (proc.process_type === "Utility") {
+    const sub = proc.cmd_args.find((a) => a.startsWith("--utility-sub-type="));
+    if (sub) {
+      const val = sub.replace("--utility-sub-type=", "");
+      // Shorten long Mojo interface names: take last segment
+      const parts = val.split(".");
+      return parts.length > 1 ? parts[parts.length - 1] : val;
+    }
+  }
+  return "";
+}
 
 const ALL_INSTANCE_TYPES = ["Stable", "Beta", "Dev", "Canary", "Internal", "WebView2", "Copilot"] as const;
 
@@ -58,19 +74,70 @@ export default function ProcessesTab() {
     } catch { return false; }
   });
   const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(loadHiddenTypes);
+  const [showArgs, setShowArgs] = useState(() => {
+    try { return localStorage.getItem(STORAGE_KEY_SHOW_ARGS) === "true"; } catch { return false; }
+  });
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refresh = useCallback(async (showLoading = true) => {
     if (showLoading) setLoading(true);
     try {
       const data = await invoke<ProcessGroup[]>("get_edge_processes");
-      setGroups(data);
+      // Preserve existing CDP URLs when refreshing process list
+      setGroups((prev) => {
+        // Build a map of pid -> (url, cdp_target_type) from previous state
+        const urlMap = new Map<number, { url: string; cdp_target_type: string }>();
+        for (const g of prev) {
+          for (const p of g.processes) {
+            if (p.url) urlMap.set(p.pid, { url: p.url, cdp_target_type: p.cdp_target_type });
+          }
+        }
+        // Carry forward URLs to matching PIDs in the new data
+        return data.map((group) => ({
+          ...group,
+          processes: group.processes.map((proc) => {
+            const prev = urlMap.get(proc.pid);
+            return prev ? { ...proc, url: prev.url, cdp_target_type: prev.cdp_target_type } : proc;
+          }),
+        }));
+      });
       // Auto-expand all groups on first load (except WebView2)
       if (showLoading) {
         setExpandedGroups(new Set(
           data.filter((g) => g.instance_type !== "WebView2").map((g) => g.browser_pid)
         ));
       }
+      // Fetch CDP URLs in the background and merge into process data
+      invoke<Record<string, { process_id: number | null; url: string; target_type: string | null }[]>>("get_cdp_urls").then((portMap) => {
+        if (!portMap || Object.keys(portMap).length === 0) return;
+
+        setGroups((prev) => {
+          let changed = false;
+          const next = prev.map((group) => {
+            const browser = group.processes.find((p) => p.process_type === "Browser");
+            if (!browser) return group;
+            const portArg = browser.cmd_args.find((a) => a.startsWith("--remote-debugging-port="));
+            const port = portArg?.split("=")[1];
+            if (!port || !portMap[port]) return group;
+
+            const pages = portMap[port];
+            let groupChanged = false;
+            const updatedProcesses = group.processes.map((proc) => {
+              const match = pages.find((p) => p.process_id && p.process_id === proc.pid);
+              if (match && (match.url !== proc.url || (match.target_type ?? "") !== proc.cdp_target_type)) {
+                groupChanged = true;
+                return { ...proc, url: match.url, cdp_target_type: match.target_type ?? "" };
+              }
+              return proc;
+            });
+
+            if (!groupChanged) return group;
+            changed = true;
+            return { ...group, processes: updatedProcesses };
+          });
+          return changed ? next : prev;
+        });
+      }).catch(() => { /* CDP not available, ignore */ });
     } catch (err) {
       console.error("Failed to get processes:", err);
     }
@@ -157,6 +224,12 @@ export default function ProcessesTab() {
     return group.channel;
   }
 
+  function hasRemoteDebugging(group: ProcessGroup): boolean {
+    const browser = group.processes.find((p) => p.process_type === "Browser");
+    if (!browser) return false;
+    return browser.cmd_args.some((a) => a.startsWith("--remote-debugging-port="));
+  }
+
   if (loading) {
     return (
       <div className="loading">
@@ -184,6 +257,14 @@ export default function ProcessesTab() {
             localStorage.setItem(STORAGE_KEY_AUTO_REFRESH, String(data.checked));
           }}
           label="Auto-refresh"
+        />
+        <Switch
+          checked={showArgs}
+          onChange={(_e, data) => {
+            setShowArgs(data.checked);
+            localStorage.setItem(STORAGE_KEY_SHOW_ARGS, String(data.checked));
+          }}
+          label="Args"
         />
         <Button
           appearance="subtle"
@@ -274,6 +355,19 @@ export default function ProcessesTab() {
                   {group.host_app}
                 </span>
               )}
+              {hasRemoteDebugging(group) && (
+                <span style={{
+                  fontSize: 10,
+                  padding: "1px 6px",
+                  borderRadius: 3,
+                  background: "rgba(0,180,80,0.15)",
+                  color: "#00b450",
+                  border: "1px solid rgba(0,180,80,0.3)",
+                  fontWeight: 600,
+                }}>
+                  CDP
+                </span>
+              )}
               <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
                 {group.processes.length} proc &middot; {getTotalMemory(group.processes)} MB
               </span>
@@ -296,11 +390,14 @@ export default function ProcessesTab() {
                     <th style={{ width: 70 }}>Memory</th>
                     <th style={{ width: 50 }}>CPU</th>
                     <th>Details</th>
+                    {showArgs && <th>Args</th>}
                     <th style={{ width: 70 }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {sortProcesses(group.processes).map((proc) => (
+                  {sortProcesses(group.processes).map((proc) => {
+                    const detail = getProcessDetail(proc);
+                    return (
                     <tr key={proc.pid}>
                       <td style={{ fontFamily: "monospace", fontSize: 12 }}>{proc.pid}</td>
                       <td>
@@ -313,24 +410,44 @@ export default function ProcessesTab() {
                       <td
                         style={{
                           fontSize: 11,
-                          maxWidth: 400,
+                          maxWidth: 350,
                           overflow: "hidden",
                           textOverflow: "ellipsis",
                           whiteSpace: "nowrap",
-                          fontFamily: "monospace",
                         }}
-                        title={proc.cmd_args.join(" ")}
+                        title={detail}
                       >
-                        {proc.url ? (
-                          <span style={{ color: "var(--accent)" }}>{proc.url}</span>
+                        {detail ? (
+                          <span style={{ color: "var(--text-primary)", fontFamily: proc.url ? "inherit" : "monospace" }}>
+                            {proc.cdp_target_type ? (
+                              <span className="badge" style={{ fontSize: 9, padding: "1px 4px", marginRight: 4, background: "var(--colorNeutralBackground3)", border: "1px solid var(--colorNeutralStroke2)" }}>{proc.cdp_target_type}</span>
+                            ) : null}
+                            {detail}
+                          </span>
                         ) : (
-                          proc.cmd_args
-                            .slice(1)
-                            .filter((a) => a.startsWith("--type=") || a.startsWith("--") && !a.startsWith("--mojo") && !a.startsWith("--field-trial"))
-                            .slice(0, 4)
-                            .join(" ") || proc.process_type
+                          <span style={{ color: "var(--text-secondary)", fontSize: 10 }}>—</span>
                         )}
                       </td>
+                      {showArgs && (
+                        <td
+                          style={{
+                            fontSize: 10,
+                            maxWidth: 300,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            fontFamily: "monospace",
+                            color: "var(--text-secondary)",
+                          }}
+                          title={proc.cmd_args.join(" ")}
+                        >
+                          {proc.cmd_args
+                            .slice(1)
+                            .filter((a) => a.startsWith("--") && !a.startsWith("--type=") && !a.startsWith("--mojo") && !a.startsWith("--field-trial") && !a.startsWith("--remote-debugging-port") && !a.startsWith("--subproc-heap-profiling") && !a.startsWith("--utility-sub-type"))
+                            .slice(0, 3)
+                            .join(" ")}
+                        </td>
+                      )}
                       <td style={{ whiteSpace: "nowrap" }}>
                         <Button
                           appearance="subtle"
@@ -348,7 +465,8 @@ export default function ProcessesTab() {
                         />
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             )}

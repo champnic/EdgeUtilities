@@ -5,6 +5,7 @@ import {
   Spinner,
   Input,
   Select,
+  Switch,
   Dialog,
   DialogTrigger,
   DialogSurface,
@@ -21,6 +22,8 @@ import {
   SaveFilled,
   FolderAddFilled,
 } from "@fluentui/react-icons";
+
+const STORAGE_KEY_REMOTE_DEBUG = "edge-utils-launcher-remote-debug";
 
 interface EdgeInstall {
   channel: string;
@@ -56,6 +59,12 @@ export default function LauncherTab() {
   const [loading, setLoading] = useState(true);
   const [statusMsg, setStatusMsg] = useState("");
   const [savePresetName, setSavePresetName] = useState("");
+  const [remoteDebugging, setRemoteDebugging] = useState(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY_REMOTE_DEBUG);
+      return stored === null ? true : stored === "true";
+    } catch { return true; }
+  });
 
   useEffect(() => {
     loadData();
@@ -151,6 +160,10 @@ export default function LauncherTab() {
 
   function buildFinalFlags(): string[] {
     const flags = [...activeFlags];
+    // Auto-add remote debugging port if enabled and not already present
+    if (remoteDebugging && !flags.some((f) => f.startsWith("--remote-debugging-port="))) {
+      flags.push("--remote-debugging-port=9222");
+    }
     if (enableFeatures.trim()) {
       flags.push(`--enable-features=${enableFeatures.trim()}`);
     }
@@ -250,6 +263,15 @@ export default function LauncherTab() {
       <div className="card">
         <div className="card-header">
           <h3>Quick Presets</h3>
+          <Switch
+            checked={remoteDebugging}
+            onChange={(_e, data) => {
+              setRemoteDebugging(data.checked);
+              localStorage.setItem(STORAGE_KEY_REMOTE_DEBUG, String(data.checked));
+            }}
+            label="Remote Debugging (CDP)"
+            style={{ fontSize: 11 }}
+          />
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
           {commonPresets.map((preset, i) => {

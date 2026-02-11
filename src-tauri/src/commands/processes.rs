@@ -26,6 +26,13 @@ pub struct ProcessGroup {
     pub processes: Vec<ProcessInfo>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CdpPageInfo {
+    pub process_id: Option<u32>,
+    pub url: String,
+    pub target_type: Option<String>,
+}
+
 /// Get all running Edge processes, grouped by parent browser process
 #[tauri::command]
 pub fn get_edge_processes() -> Result<Vec<ProcessGroup>, String> {
@@ -84,16 +91,11 @@ pub fn get_edge_processes() -> Result<Vec<ProcessGroup>, String> {
         .map(|p| p.pid)
         .collect();
 
-    // For each process, walk up the parent chain within Edge processes to find its root
+    // Group processes by root ancestor
     let mut groups: HashMap<u32, Vec<ProcessInfo>> = HashMap::new();
     for proc in &edge_processes {
         let group_pid = find_root_ancestor(&edge_processes, proc.pid, &root_pids, &edge_pids);
         groups.entry(group_pid).or_default().push(proc.clone());
-    }
-
-    // Try to enrich renderer processes with URLs via Chrome DevTools Protocol
-    for processes in groups.values_mut() {
-        enrich_with_cdp(processes);
     }
 
     let mut result: Vec<ProcessGroup> = groups
@@ -397,6 +399,8 @@ struct CdpTarget {
     target_type: Option<String>,
     #[serde(rename = "processId")]
     process_id: Option<u32>,
+    #[allow(dead_code)]
+    id: Option<String>,
 }
 
 /// Dechunk HTTP chunked transfer encoding
@@ -429,7 +433,7 @@ fn dechunk_body(body: &str) -> String {
 fn fetch_cdp_targets(port: u16) -> Vec<CdpTarget> {
     use std::io::{Read, Write};
     use std::net::TcpStream;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     let addr = format!("127.0.0.1:{}", port);
     let sock_addr: std::net::SocketAddr = match addr.parse() {
@@ -437,13 +441,13 @@ fn fetch_cdp_targets(port: u16) -> Vec<CdpTarget> {
         Err(_) => return vec![],
     };
 
-    let mut stream = match TcpStream::connect_timeout(&sock_addr, Duration::from_millis(300)) {
+    let mut stream = match TcpStream::connect_timeout(&sock_addr, Duration::from_millis(200)) {
         Ok(s) => s,
         Err(_) => return vec![],
     };
 
-    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
-    stream.set_write_timeout(Some(Duration::from_millis(500))).ok();
+    stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
+    stream.set_write_timeout(Some(Duration::from_millis(200))).ok();
 
     let request = format!(
         "GET /json HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
@@ -454,8 +458,23 @@ fn fetch_cdp_targets(port: u16) -> Vec<CdpTarget> {
         return vec![];
     }
 
+    // Read response fully — retry on partial reads until connection closes or time budget exhausted
     let mut response = Vec::new();
-    let _ = stream.read_to_end(&mut response);
+    let read_start = Instant::now();
+    let read_budget = Duration::from_secs(1);
+    loop {
+        if read_start.elapsed() > read_budget {
+            break;
+        }
+        let mut buf = vec![0u8; 8192];
+        match stream.read(&mut buf) {
+            Ok(0) => break, // Connection closed
+            Ok(n) => response.extend_from_slice(&buf[..n]),
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock
+                || e.kind() == std::io::ErrorKind::TimedOut => break,
+            Err(_) => break,
+        }
+    }
     let response_str = String::from_utf8_lossy(&response);
 
     // Separate headers from body
@@ -481,48 +500,174 @@ fn fetch_cdp_targets(port: u16) -> Vec<CdpTarget> {
     serde_json::from_str(json_str).unwrap_or_default()
 }
 
-/// Try to enrich renderer processes with URLs via Chrome DevTools Protocol.
-/// This works when Edge is started with --remote-debugging-port=PORT.
-/// The Edge Process Viewer in src3 uses internal Mojo IPC to the browser's
-/// Task Manager for URL extraction, which is not available from external apps.
-fn enrich_with_cdp(processes: &mut Vec<ProcessInfo>) {
-    // Find browser process command line
-    let browser_args = match processes.iter().find(|p| p.process_type == "Browser") {
-        Some(bp) => bp.cmd_args.clone(),
-        None => return,
+/// Diagnostic: return raw CDP target info for a given debugging port
+#[tauri::command]
+pub fn get_cdp_debug_info(port: u16) -> Result<String, String> {
+    let targets = fetch_cdp_targets(port);
+    if targets.is_empty() {
+        return Err(format!("No targets found on port {}. Is Edge running with --remote-debugging-port={}?", port, port));
+    }
+    let summary: Vec<String> = targets.iter().map(|t| {
+        format!(
+            "type={:?} processId={:?} url={:?} title={:?} id={:?}",
+            t.target_type, t.process_id, t.url, t.title, t.id
+        )
+    }).collect();
+    Ok(summary.join("\n"))
+}
+
+/// Get the browser-level WebSocket debugger URL from /json/version
+fn get_browser_ws_url(port: u16) -> Option<String> {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::time::{Duration, Instant};
+
+    let addr = format!("127.0.0.1:{}", port);
+    let sock_addr: std::net::SocketAddr = addr.parse().ok()?;
+    let mut stream = TcpStream::connect_timeout(&sock_addr, Duration::from_millis(200)).ok()?;
+    stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
+    stream.set_write_timeout(Some(Duration::from_millis(200))).ok();
+
+    let request = format!(
+        "GET /json/version HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+        port
+    );
+    stream.write_all(request.as_bytes()).ok()?;
+
+    let mut response = Vec::new();
+    let read_start = Instant::now();
+    loop {
+        if read_start.elapsed() > Duration::from_secs(1) { break; }
+        let mut buf = vec![0u8; 4096];
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => response.extend_from_slice(&buf[..n]),
+            Err(_) => break,
+        }
+    }
+    let response_str = String::from_utf8_lossy(&response);
+    let body = response_str.split("\r\n\r\n").nth(1)?;
+
+    // Handle chunked encoding
+    let json_str = if body.contains("webSocketDebuggerUrl") {
+        body.to_string()
+    } else {
+        dechunk_body(body)
     };
 
-    // Try to get debugging port from command line
-    let mut port = extract_debugging_port(&browser_args);
+    let v: serde_json::Value = serde_json::from_str(&json_str).ok()?;
+    v.get("webSocketDebuggerUrl")?.as_str().map(|s| s.to_string())
+}
 
-    // Try DevToolsActivePort file
-    if port.is_none() {
-        if let Some(user_data_dir) = extract_user_data_dir(&browser_args) {
-            port = read_devtools_active_port(&user_data_dir);
+/// Target info as returned by CDP WebSocket protocol
+#[derive(Debug, Deserialize)]
+struct CdpWsTargetInfo {
+    #[serde(rename = "targetId")]
+    target_id: Option<String>,
+    #[serde(rename = "type")]
+    #[allow(dead_code)]
+    target_type: Option<String>,
+    title: Option<String>,
+    url: Option<String>,
+    pid: Option<u32>,
+}
+
+/// Fetch page targets with PIDs via CDP WebSocket.
+/// Uses Target.attachToTarget(flatten:true) to populate the pid field.
+fn fetch_cdp_targets_ws(port: u16) -> Vec<CdpPageInfo> {
+    use tungstenite::{connect, Message};
+    use std::time::{Duration, Instant};
+
+    let ws_url = match get_browser_ws_url(port) {
+        Some(url) => url,
+        None => return vec![],
+    };
+
+    let (mut socket, _response) = match connect(&ws_url) {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+
+    // Set underlying stream to non-blocking with timeout
+    if let tungstenite::stream::MaybeTlsStream::Plain(ref s) = socket.get_ref() {
+        s.set_read_timeout(Some(Duration::from_millis(500))).ok();
+        s.set_write_timeout(Some(Duration::from_millis(500))).ok();
+    }
+
+    let budget = Instant::now();
+    let max_time = Duration::from_secs(3);
+
+    // Step 1: Get all targets (pages, service workers, iframes, etc.)
+    let get_targets_msg = r#"{"id":1,"method":"Target.getTargets"}"#;
+    if socket.send(Message::Text(get_targets_msg.to_string())).is_err() {
+        let _ = socket.close(None);
+        return vec![];
+    }
+
+    // Read until we get the id:1 response
+    let mut page_targets: Vec<CdpWsTargetInfo> = Vec::new();
+    loop {
+        if budget.elapsed() > max_time { break; }
+        match socket.read() {
+            Ok(Message::Text(text)) => {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if v.get("id").and_then(|i| i.as_u64()) == Some(1) {
+                        if let Some(infos) = v.pointer("/result/targetInfos") {
+                            if let Ok(targets) = serde_json::from_value::<Vec<CdpWsTargetInfo>>(infos.clone()) {
+                                page_targets = targets;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            Ok(_) => continue,
+            Err(_) => break,
         }
     }
 
-    let port = match port {
-        Some(p) => p,
-        None => return,
-    };
+    if page_targets.is_empty() {
+        let _ = socket.close(None);
+        return vec![];
+    }
 
-    let targets = fetch_cdp_targets(port);
+    // Step 2: Attach to each target to get PIDs
+    let mut results: Vec<CdpPageInfo> = Vec::new();
+    let mut msg_id: u64 = 10;
+    let mut pending_attaches: HashMap<u64, String> = HashMap::new(); // msg_id -> target_id
+    let mut sessions_to_detach: Vec<String> = Vec::new();
+    let mut target_id_to_result_idx: HashMap<String, usize> = HashMap::new(); // target_id -> results index
 
-    for target in &targets {
+    for target in &page_targets {
+        let target_id = match &target.target_id {
+            Some(id) => id.clone(),
+            None => continue,
+        };
+
+        let ttype = target.target_type.as_deref().unwrap_or("page");
+
+        // Skip target types that aren't interesting
+        let dominated = matches!(ttype, "browser" | "webview" | "auction_worklet");
+        if dominated { continue; }
+
         let url = match &target.url {
-            Some(u) if !u.is_empty() && u != "about:blank" && !u.starts_with("devtools://") => u,
+            Some(u) if !u.is_empty()
+                && u != "about:blank"
+                && !u.starts_with("devtools://")
+                && !u.starts_with("chrome-extension://")
+                && !u.starts_with("edge://") => u.clone(),
             _ => continue,
         };
 
-        // Only map page/iframe targets
-        let is_page = target
-            .target_type
-            .as_deref()
-            .map_or(true, |t| t == "page" || t == "iframe" || t == "other");
-        if !is_page {
-            continue;
-        }
+        let friendly_type = match ttype {
+            "page" => None,
+            "service_worker" => Some("Service Worker"),
+            "shared_worker" => Some("Shared Worker"),
+            "worker" => Some("Worker"),
+            "iframe" => Some("iframe"),
+            "background_page" => Some("Background Page"),
+            other => Some(other),
+        };
 
         let title = target.title.as_deref().unwrap_or("");
         let display = if !title.is_empty() && title != url.as_str() {
@@ -531,14 +676,160 @@ fn enrich_with_cdp(processes: &mut Vec<ProcessInfo>) {
             url.clone()
         };
 
-        // Map by process ID if available from CDP
-        if let Some(target_pid) = target.process_id {
-            if let Some(proc) = processes
-                .iter_mut()
-                .find(|p| p.pid == target_pid && p.url.is_empty())
-            {
-                proc.url = display;
+        let target_type_str = friendly_type.map(|s| s.to_string());
+
+        // If PID is already populated and non-zero, use it directly
+        if let Some(pid) = target.pid.filter(|&p| p > 0) {
+            results.push(CdpPageInfo {
+                process_id: Some(pid),
+                url: display,
+                target_type: target_type_str,
+            });
+            continue;
+        }
+
+        // Need to attach to get the PID
+        let attach_msg = format!(
+            r#"{{"id":{},"method":"Target.attachToTarget","params":{{"targetId":"{}","flatten":true}}}}"#,
+            msg_id, target_id
+        );
+        if socket.send(Message::Text(attach_msg)).is_err() {
+            continue;
+        }
+        pending_attaches.insert(msg_id, target_id.clone());
+
+        // Store display URL and track its index for PID fill-in later
+        let idx = results.len();
+        target_id_to_result_idx.insert(target_id, idx);
+        results.push(CdpPageInfo {
+            process_id: None, // Will be filled from attachedToTarget event
+            url: display,
+            target_type: target_type_str,
+        });
+
+        msg_id += 1;
+    }
+
+    // Read responses to collect PIDs from attachedToTarget events
+    // Map target_id -> (pid, session_id)
+    let mut target_pids: HashMap<String, u32> = HashMap::new();
+    let mut responses_needed = pending_attaches.len();
+
+    if responses_needed > 0 {
+        loop {
+            if budget.elapsed() > max_time || responses_needed == 0 { break; }
+            match socket.read() {
+                Ok(Message::Text(text)) => {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                        // Handle attachedToTarget event
+                        if v.get("method").and_then(|m| m.as_str()) == Some("Target.attachedToTarget") {
+                            if let Some(params) = v.get("params") {
+                                let pid = params.pointer("/targetInfo/pid")
+                                    .and_then(|p| p.as_u64())
+                                    .map(|p| p as u32)
+                                    .filter(|&p| p > 0);
+                                let tid = params.pointer("/targetInfo/targetId")
+                                    .and_then(|t| t.as_str())
+                                    .map(|s| s.to_string());
+                                let session_id = params.get("sessionId")
+                                    .and_then(|s| s.as_str())
+                                    .map(|s| s.to_string());
+
+                                if let (Some(pid), Some(tid)) = (pid, tid) {
+                                    target_pids.insert(tid, pid);
+                                }
+                                if let Some(sid) = session_id {
+                                    sessions_to_detach.push(sid);
+                                }
+                            }
+                        }
+                        // Handle attach response (decrements counter)
+                        if let Some(id) = v.get("id").and_then(|i| i.as_u64()) {
+                            if pending_attaches.contains_key(&id) {
+                                responses_needed -= 1;
+                            }
+                        }
+                    }
+                }
+                Ok(_) => continue,
+                Err(_) => break,
             }
         }
     }
+
+    // Fill in PIDs from attachedToTarget events using target_id -> result index map
+    for (tid, pid) in &target_pids {
+        if let Some(&idx) = target_id_to_result_idx.get(tid) {
+            if idx < results.len() {
+                results[idx].process_id = Some(*pid);
+            }
+        }
+    }
+
+    // Detach from all sessions (best effort)
+    for session_id in &sessions_to_detach {
+        let detach_msg = format!(
+            r#"{{"id":{},"method":"Target.detachFromTarget","params":{{"sessionId":"{}"}}}}"#,
+            msg_id, session_id
+        );
+        let _ = socket.send(Message::Text(detach_msg));
+        msg_id += 1;
+    }
+
+    let _ = socket.close(None);
+
+    // Only return entries with PIDs
+    results.into_iter().filter(|p| p.process_id.is_some()).collect()
+}
+
+/// Fetch CDP URLs for all running Edge browser groups.
+/// Returns a map of debugging port -> list of (processId, display URL).
+/// Uses WebSocket CDP protocol to attach to targets and get real PIDs.
+/// Called separately from get_edge_processes so the process list renders instantly.
+#[tauri::command]
+pub fn get_cdp_urls() -> Result<HashMap<u16, Vec<CdpPageInfo>>, String> {
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing()
+            .with_cmd(UpdateKind::Always)
+            .with_exe(UpdateKind::Always),
+    );
+
+    let mut result: HashMap<u16, Vec<CdpPageInfo>> = HashMap::new();
+
+    for (_pid, process) in sys.processes() {
+        let name = process.name().to_string_lossy().to_string();
+        let exe_path = process.exe().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+        if !name.to_lowercase().contains("msedge") && !exe_path.to_lowercase().contains("msedge") {
+            continue;
+        }
+        let cmd_args: Vec<String> = process.cmd().iter().map(|s| s.to_string_lossy().to_string()).collect();
+        if detect_process_type(&cmd_args) != "Browser" {
+            continue;
+        }
+
+        let mut port = extract_debugging_port(&cmd_args);
+        if port.is_none() {
+            if let Some(user_data_dir) = extract_user_data_dir(&cmd_args) {
+                port = read_devtools_active_port(&user_data_dir);
+            }
+        }
+        let port = match port {
+            Some(p) => p,
+            None => continue,
+        };
+
+        if result.contains_key(&port) {
+            continue;
+        }
+
+        let pages = fetch_cdp_targets_ws(port);
+        if !pages.is_empty() {
+            result.insert(port, pages);
+        }
+    }
+
+    Ok(result)
 }
