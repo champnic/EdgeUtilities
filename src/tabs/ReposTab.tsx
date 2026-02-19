@@ -18,6 +18,7 @@ import {
   WindowConsoleFilled,
   ReOrderFilled,
   ArrowDownloadFilled,
+  SearchFilled,
 } from "@fluentui/react-icons";
 
 interface OutDir {
@@ -39,6 +40,7 @@ interface RepoInfo {
   current_branch: string;
   out_dirs: OutDir[];
   recent_commits: CommitInfo[];
+  merge_base_index: number | null;
 }
 
 interface RepoState {
@@ -70,6 +72,7 @@ export default function ReposTab() {
   const [newOutConfig, setNewOutConfig] = useState("win_x64_debug_developer_build");
   const [newOutPath, setNewOutPath] = useState("");
   const [creatingOutDir, setCreatingOutDir] = useState(false);
+  const [addOutDirExpanded, setAddOutDirExpanded] = useState<string | null>(null);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const repoCardRefs = useRef<Map<number, HTMLDivElement>>(new Map());
@@ -91,8 +94,7 @@ export default function ReposTab() {
         loadRepoInfo(p);
       }
     } catch {
-      setRepoPaths(["d:\\edge\\src3"]);
-      loadRepoInfo("d:\\edge\\src3");
+      setRepoPaths([]);
     }
   }
 
@@ -383,7 +385,7 @@ export default function ReposTab() {
         <Input
           value={newRepoPath}
           onChange={(_e, data) => setNewRepoPath(data.value)}
-          placeholder="Add repo path (e.g., d:\edge\src3)"
+          placeholder="Add repo path (e.g., d:\edge\src)"
           style={{ flex: 1 }}
           size="small"
           onKeyDown={(e) => { if (e.key === "Enter") addRepo(); }}
@@ -395,6 +397,34 @@ export default function ReposTab() {
           onClick={addRepo}
         >
           Add Repo
+        </Button>
+        <Button
+          appearance="subtle"
+          icon={<SearchFilled />}
+          size="small"
+          onClick={async () => {
+            try {
+              const detected = await invoke<string[]>("detect_repos");
+              if (detected.length === 0) {
+                setStatusMsg("No Edge repos found on disk.");
+                return;
+              }
+              const newPaths = detected.filter((d) => !repoPaths.includes(d));
+              if (newPaths.length === 0) {
+                setStatusMsg("All detected repos are already added.");
+                return;
+              }
+              const updated = [...repoPaths, ...newPaths];
+              setRepoPaths(updated);
+              for (const p of newPaths) loadRepoInfo(p);
+              await invoke("save_repo_list", { configDir, repos: updated });
+              setStatusMsg(`Found ${newPaths.length} new repo(s).`);
+            } catch (e) {
+              setStatusMsg(`Scan failed: ${e}`);
+            }
+          }}
+        >
+          Scan
         </Button>
       </div>
 
@@ -456,7 +486,7 @@ export default function ReposTab() {
                 </span>
               )}
               {state.branch && (
-                <span style={{ fontSize: 12, color: "var(--accent)" }}>
+                <span style={{ fontSize: 14, fontWeight: 600, color: "#4fc3f7", fontFamily: "monospace" }}>
                   {state.branch}
                 </span>
               )}
@@ -648,58 +678,70 @@ export default function ReposTab() {
                         </div>
                       )}
 
-                      <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
-                        <Select
-                          value={newOutConfig}
-                          onChange={(_e, data) => setNewOutConfig(data.value)}
-                          size="small"
-                          style={{ flex: 1, minWidth: 220 }}
-                        >
-                          <optgroup label="Developer Builds">
-                            <option value="win_x64_debug_developer_build">win_x64_debug_developer_build</option>
-                            <option value="win_x64_debug_full_developer_build">win_x64_debug_full_developer_build</option>
-                            <option value="win_x64_release_developer_build">win_x64_release_developer_build</option>
-                            <option value="mac_arm64_debug_developer_build">mac_arm64_debug_developer_build</option>
-                            <option value="mac_arm64_debug_full_developer_build">mac_arm64_debug_full_developer_build</option>
-                            <option value="mac_arm64_release_developer_build">mac_arm64_release_developer_build</option>
-                            <option value="mac_x64_debug_developer_build">mac_x64_debug_developer_build</option>
-                            <option value="mac_x64_debug_full_developer_build">mac_x64_debug_full_developer_build</option>
-                            <option value="mac_x64_release_developer_build">mac_x64_release_developer_build</option>
-                            <option value="linux_x64_debug_developer_build">linux_x64_debug_developer_build</option>
-                            <option value="linux_x64_debug_full_developer_build">linux_x64_debug_full_developer_build</option>
-                            <option value="linux_x64_release_developer_build">linux_x64_release_developer_build</option>
-                          </optgroup>
-                          <optgroup label="Sanitizer Builds">
-                            <option value="win_x64_asan_libfuzz_release">win_x64_asan_libfuzz_release</option>
-                            <option value="win_x64_asan_release">win_x64_asan_release</option>
-                            <option value="linux_x64_release_asan">linux_x64_release_asan</option>
-                            <option value="linux_x64_release_msan">linux_x64_release_msan</option>
-                            <option value="mac_x64_Release_asan">mac_x64_Release_asan</option>
-                          </optgroup>
-                          <optgroup label="Official Builds">
-                            <option value="win_x64_official">win_x64_official</option>
-                            <option value="win_arm64_official">win_arm64_official</option>
-                            <option value="mac_x64_Official">mac_x64_Official</option>
-                            <option value="mac_arm64_Official">mac_arm64_Official</option>
-                            <option value="linux_x64_official">linux_x64_official</option>
-                          </optgroup>
-                        </Select>
-                        <Input
-                          value={newOutPath}
-                          onChange={(_e, data) => setNewOutPath(data.value)}
-                          placeholder="Path (optional)"
-                          size="small"
-                          style={{ flex: 1 }}
-                        />
+                      <div style={{ marginTop: 8 }}>
                         <Button
                           appearance="subtle"
-                          icon={<AddFilled />}
+                          icon={addOutDirExpanded === repoPath ? <ChevronDownFilled /> : <AddFilled />}
                           size="small"
-                          onClick={() => handleCreateOutDir(repoPath)}
-                          disabled={creatingOutDir}
+                          onClick={() => setAddOutDirExpanded(addOutDirExpanded === repoPath ? null : repoPath)}
                         >
-                          {creatingOutDir ? "Creating..." : "Add"}
+                          Add Out Directory
                         </Button>
+                        {addOutDirExpanded === repoPath && (
+                          <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
+                            <Select
+                              value={newOutConfig}
+                              onChange={(_e, data) => setNewOutConfig(data.value)}
+                              size="small"
+                              style={{ flex: 1, minWidth: 220 }}
+                            >
+                              <optgroup label="Developer Builds">
+                                <option value="win_x64_debug_developer_build">win_x64_debug_developer_build</option>
+                                <option value="win_x64_debug_full_developer_build">win_x64_debug_full_developer_build</option>
+                                <option value="win_x64_release_developer_build">win_x64_release_developer_build</option>
+                                <option value="mac_arm64_debug_developer_build">mac_arm64_debug_developer_build</option>
+                                <option value="mac_arm64_debug_full_developer_build">mac_arm64_debug_full_developer_build</option>
+                                <option value="mac_arm64_release_developer_build">mac_arm64_release_developer_build</option>
+                                <option value="mac_x64_debug_developer_build">mac_x64_debug_developer_build</option>
+                                <option value="mac_x64_debug_full_developer_build">mac_x64_debug_full_developer_build</option>
+                                <option value="mac_x64_release_developer_build">mac_x64_release_developer_build</option>
+                                <option value="linux_x64_debug_developer_build">linux_x64_debug_developer_build</option>
+                                <option value="linux_x64_debug_full_developer_build">linux_x64_debug_full_developer_build</option>
+                                <option value="linux_x64_release_developer_build">linux_x64_release_developer_build</option>
+                              </optgroup>
+                              <optgroup label="Sanitizer Builds">
+                                <option value="win_x64_asan_libfuzz_release">win_x64_asan_libfuzz_release</option>
+                                <option value="win_x64_asan_release">win_x64_asan_release</option>
+                                <option value="linux_x64_release_asan">linux_x64_release_asan</option>
+                                <option value="linux_x64_release_msan">linux_x64_release_msan</option>
+                                <option value="mac_x64_Release_asan">mac_x64_Release_asan</option>
+                              </optgroup>
+                              <optgroup label="Official Builds">
+                                <option value="win_x64_official">win_x64_official</option>
+                                <option value="win_arm64_official">win_arm64_official</option>
+                                <option value="mac_x64_Official">mac_x64_Official</option>
+                                <option value="mac_arm64_Official">mac_arm64_Official</option>
+                                <option value="linux_x64_official">linux_x64_official</option>
+                              </optgroup>
+                            </Select>
+                            <Input
+                              value={newOutPath}
+                              onChange={(_e, data) => setNewOutPath(data.value)}
+                              placeholder="Path (optional)"
+                              size="small"
+                              style={{ flex: 1 }}
+                            />
+                            <Button
+                              appearance="subtle"
+                              icon={<AddFilled />}
+                              size="small"
+                              onClick={() => handleCreateOutDir(repoPath)}
+                              disabled={creatingOutDir}
+                            >
+                              {creatingOutDir ? "Creating..." : "Create"}
+                            </Button>
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -721,19 +763,40 @@ export default function ReposTab() {
                         </span>
                         Recent Commits
                       </h4>
-                      {state.commitsExpanded && (
-                        <ul className="commit-list">
-                          {state.info.recent_commits.map((commit, i) => (
-                            <li key={i}>
-                              <span className="hash">{commit.short_hash}</span>
-                              <span className="date">{commit.date}</span>
-                              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                {commit.subject}
-                              </span>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
+                      {state.commitsExpanded && (() => {
+                        const mbi = state.info.merge_base_index;
+                        // Show commits up to and including the merge-base
+                        const displayCommits = mbi != null
+                          ? state.info.recent_commits.slice(0, mbi + 1)
+                          : state.info.recent_commits;
+                        return (
+                          <ul className="commit-list">
+                            {displayCommits.map((commit, i) => {
+                              const isMergeBase = mbi != null && i === mbi;
+                              return (
+                                <li key={i} style={isMergeBase ? { borderTop: "1px solid #4fc3f7", paddingTop: 6, marginTop: 4 } : undefined}>
+                                  {isMergeBase && (
+                                    <div style={{ fontSize: 11, fontWeight: 700, color: "#4fc3f7", marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
+                                      <span style={{ background: "#4fc3f7", color: "#000", borderRadius: 3, padding: "1px 6px", fontSize: 10, fontWeight: 800 }}>MAIN</span>
+                                      <span style={{ color: "#aaa" }}>Branched from main on {commit.date}</span>
+                                    </div>
+                                  )}
+                                  <span className="hash">{commit.short_hash}</span>
+                                  <span className="date" style={isMergeBase ? { color: "#4fc3f7", fontWeight: 600 } : undefined}>{commit.date}</span>
+                                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    {commit.subject}
+                                  </span>
+                                </li>
+                              );
+                            })}
+                            {mbi != null && mbi < state.info.recent_commits.length - 1 && (
+                              <li style={{ color: "#666", fontStyle: "italic", fontSize: 11, paddingTop: 2 }}>
+                                {state.info.recent_commits.length - mbi - 1} earlier commit(s) on main not shown
+                              </li>
+                            )}
+                          </ul>
+                        );
+                      })()}
                     </div>
                   </>
                 )}

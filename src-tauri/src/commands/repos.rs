@@ -9,6 +9,8 @@ pub struct RepoInfo {
     pub current_branch: String,
     pub out_dirs: Vec<OutDir>,
     pub recent_commits: Vec<CommitInfo>,
+    /// Index of the merge-base commit with main (None if on main or not found)
+    pub merge_base_index: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -61,11 +63,19 @@ pub fn get_repo_info(repo_path: String) -> Result<RepoInfo, String> {
     let out_dirs = find_out_dirs(&path);
     let recent_commits = get_recent_commits(&path, 15);
 
+    // Find where main branch diverges
+    let merge_base_index = if current_branch == "main" {
+        None
+    } else {
+        find_merge_base_index(&path, &recent_commits)
+    };
+
     Ok(RepoInfo {
         path: repo_path,
         current_branch,
         out_dirs,
         recent_commits,
+        merge_base_index,
     })
 }
 
@@ -118,6 +128,7 @@ pub fn create_out_dir(repo_path: String, config_name: String, out_path: String) 
         ])
         .current_dir(&src_path)
         .env("PATH", prepend_to_path(&depot_tools))
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
         .output()
         .map_err(|e| format!("Failed to run autogn: {}", e))?;
 
@@ -178,6 +189,7 @@ pub async fn start_build(
         let output = tokio::process::Command::new(&comspec)
             .args(["/c", &full_cmd])
             .current_dir(&src_path)
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .output()
             .await
             .map_err(|e| format!("Failed to start build: {}", e))?;
@@ -196,6 +208,7 @@ pub async fn start_build(
             .args(["-C", &out_dir, &target])
             .current_dir(&src_path)
             .env("PATH", prepend_to_path(&depot_tools))
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .output()
             .await
             .map_err(|e| format!("Failed to start build: {}", e))?;
@@ -233,13 +246,64 @@ pub fn read_args_gn(out_dir_path: String) -> Result<String, String> {
     std::fs::read_to_string(&args_path).map_err(|e| e.to_string())
 }
 
+/// Check if a directory looks like an Edge Chromium repo.
+fn is_edge_repo(path: &Path) -> bool {
+    let has_build_gn = path.join("BUILD.gn").exists();
+    let has_edge_dir = path.join("edge").exists();
+    let has_gclient = path
+        .parent()
+        .map(|p| p.join(".gclient").exists())
+        .unwrap_or(false);
+    has_build_gn && (has_edge_dir || has_gclient)
+}
+
+/// Auto-detect Edge Chromium repos by scanning drive roots for edge*/src* patterns.
+#[tauri::command]
+pub fn detect_repos() -> Vec<String> {
+    let mut found = Vec::new();
+    for drive in b'C'..=b'Z' {
+        let root = PathBuf::from(format!("{}:\\", drive as char));
+        if !root.exists() {
+            continue;
+        }
+        let entries = match std::fs::read_dir(&root) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            if !name.starts_with("edge") || !entry.path().is_dir() {
+                continue;
+            }
+            let sub_entries = match std::fs::read_dir(entry.path()) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            for sub in sub_entries.flatten() {
+                let sub_name = sub.file_name().to_string_lossy().to_lowercase();
+                if sub_name.starts_with("src") && sub.path().is_dir() && is_edge_repo(&sub.path())
+                {
+                    found.push(sub.path().to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
 /// Load saved repo list from disk
 #[tauri::command]
 pub fn load_repo_list(config_dir: String) -> Result<Vec<String>, String> {
     let path = PathBuf::from(&config_dir).join("repo_list.json");
     if !path.exists() {
-        // Default repo path
-        return Ok(vec!["d:\\edge\\src3".to_string()]);
+        // Auto-detect repos on disk when no config exists yet
+        let detected = detect_repos();
+        if !detected.is_empty() {
+            return Ok(detected);
+        }
+        return Ok(vec![]);
     }
     let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     serde_json::from_str(&content).map_err(|e| e.to_string())
@@ -338,9 +402,11 @@ fn prepend_to_path(dir: &Path) -> String {
 }
 
 fn run_git(dir: &Path, args: &[&str]) -> Result<String, String> {
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
     let output = Command::new("git")
         .args(args)
         .current_dir(dir)
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| e.to_string())?;
 
@@ -401,6 +467,18 @@ fn get_recent_commits(repo_path: &Path, count: usize) -> Vec<CommitInfo> {
             .collect(),
         Err(_) => Vec::new(),
     }
+}
+
+/// Find the index of the merge-base commit with main/master in the recent commits list.
+fn find_merge_base_index(repo_path: &Path, commits: &[CommitInfo]) -> Option<usize> {
+    // Try main first, then master
+    let merge_base_hash = run_git(repo_path, &["merge-base", "HEAD", "main"])
+        .or_else(|_| run_git(repo_path, &["merge-base", "HEAD", "master"]))
+        .ok()?
+        .trim()
+        .to_string();
+
+    commits.iter().position(|c| c.hash == merge_base_hash)
 }
 
 fn find_depot_tools(src_path: &Path) -> Option<PathBuf> {

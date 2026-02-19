@@ -42,6 +42,7 @@ pub fn run() {
             start_build,
             delete_out_dir,
             read_args_gn,
+            detect_repos,
             load_repo_list,
             save_repo_list,
             // Scripts
