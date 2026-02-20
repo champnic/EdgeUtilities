@@ -29,6 +29,102 @@ pub struct CommitInfo {
     pub date: String,
 }
 
+/// Detect the current git state: branch name, detached HEAD, rebase/merge in progress, etc.
+fn detect_git_state(repo_path: &Path) -> String {
+    let branch = run_git(repo_path, &["branch", "--show-current"])
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    if !branch.is_empty() {
+        // Check for in-progress operations even when on a branch (e.g., merge conflicts)
+        let git_dir = resolve_git_dir(repo_path);
+        if git_dir.join("MERGE_HEAD").exists() {
+            return format!("{} (merge in progress)", branch);
+        }
+        return branch;
+    }
+
+    // HEAD is detached — figure out why
+    let git_dir = resolve_git_dir(repo_path);
+
+    // Interactive rebase
+    if git_dir.join("rebase-merge").exists() {
+        let head_name = std::fs::read_to_string(git_dir.join("rebase-merge").join("head-name"))
+            .unwrap_or_default()
+            .trim()
+            .replace("refs/heads/", "");
+        let step = std::fs::read_to_string(git_dir.join("rebase-merge").join("msgnum"))
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let total = std::fs::read_to_string(git_dir.join("rebase-merge").join("end"))
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if !head_name.is_empty() && !step.is_empty() {
+            return format!("{} (rebase {}/{})", head_name, step, total);
+        }
+        return format!("{}(rebasing)", if head_name.is_empty() { "HEAD ".to_string() } else { format!("{} ", head_name) });
+    }
+
+    // Non-interactive rebase (git rebase without -i)
+    if git_dir.join("rebase-apply").exists() {
+        let head_name = std::fs::read_to_string(git_dir.join("rebase-apply").join("head-name"))
+            .unwrap_or_default()
+            .trim()
+            .replace("refs/heads/", "");
+        let label = if head_name.is_empty() { "HEAD".to_string() } else { head_name };
+        return format!("{} (rebase-apply)", label);
+    }
+
+    // Merge in progress
+    if git_dir.join("MERGE_HEAD").exists() {
+        return "HEAD (merge in progress)".to_string();
+    }
+
+    // Cherry-pick in progress
+    if git_dir.join("CHERRY_PICK_HEAD").exists() {
+        return "HEAD (cherry-pick)".to_string();
+    }
+
+    // Revert in progress
+    if git_dir.join("REVERT_HEAD").exists() {
+        return "HEAD (revert)".to_string();
+    }
+
+    // Bisect in progress
+    if git_dir.join("BISECT_LOG").exists() {
+        return "HEAD (bisecting)".to_string();
+    }
+
+    // Plain detached HEAD — show the short SHA
+    let short_sha = run_git(repo_path, &["rev-parse", "--short", "HEAD"])
+        .unwrap_or_else(|_| "unknown".to_string())
+        .trim()
+        .to_string();
+
+    format!("HEAD detached at {}", short_sha)
+}
+
+/// Resolve the actual .git directory (handles worktrees where .git is a file pointing elsewhere)
+fn resolve_git_dir(repo_path: &Path) -> PathBuf {
+    let dot_git = repo_path.join(".git");
+    if dot_git.is_file() {
+        // Worktree: .git is a file containing "gitdir: <path>"
+        if let Ok(content) = std::fs::read_to_string(&dot_git) {
+            if let Some(gitdir) = content.trim().strip_prefix("gitdir: ") {
+                let gitdir_path = PathBuf::from(gitdir);
+                if gitdir_path.is_absolute() {
+                    return gitdir_path;
+                }
+                return repo_path.join(gitdir_path);
+            }
+        }
+    }
+    dot_git
+}
+
 /// Lightweight: fetch only the current branch name for a repo
 #[tauri::command]
 pub fn get_repo_branch(repo_path: String) -> Result<String, String> {
@@ -38,12 +134,7 @@ pub fn get_repo_branch(repo_path: String) -> Result<String, String> {
         return Err(format!("{} is not a valid repo", repo_path));
     }
 
-    let branch = run_git(&path, &["branch", "--show-current"])
-        .unwrap_or_else(|_| "unknown".to_string())
-        .trim()
-        .to_string();
-
-    Ok(branch)
+    Ok(detect_git_state(&path))
 }
 
 /// Full repo info: branch, out dirs, recent commits (call on expand)
@@ -55,10 +146,7 @@ pub fn get_repo_info(repo_path: String) -> Result<RepoInfo, String> {
         return Err(format!("{} is not a valid repo", repo_path));
     }
 
-    let current_branch = run_git(&path, &["branch", "--show-current"])
-        .unwrap_or_else(|_| "unknown".to_string())
-        .trim()
-        .to_string();
+    let current_branch = detect_git_state(&path);
 
     let out_dirs = find_out_dirs(&path);
     let recent_commits = get_recent_commits(&path, 15);

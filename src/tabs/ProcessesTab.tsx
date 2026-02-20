@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Button, Spinner, Switch } from "@fluentui/react-components";
+import { Button, Spinner, Switch, Tooltip } from "@fluentui/react-components";
 import {
   ArrowSyncFilled,
   DismissCircleFilled,
   BugFilled,
+  QuestionCircleFilled,
 } from "@fluentui/react-icons";
+import StatusBar from "../components/StatusBar";
 
 interface ProcessInfo {
   pid: number;
@@ -308,19 +310,7 @@ export default function ProcessesTab() {
         })}
       </div>
 
-      {statusMsg && (
-        <div className="card" style={{ marginBottom: 12 }}>
-          <span>{statusMsg}</span>
-          <Button
-            appearance="subtle"
-            size="small"
-            onClick={() => setStatusMsg("")}
-            style={{ marginLeft: 8 }}
-          >
-            Dismiss
-          </Button>
-        </div>
-      )}
+      <StatusBar message={statusMsg} tab="Processes" onDismiss={() => setStatusMsg("")} />
 
       {groups.length === 0 ? (
         <div className="empty-state">
@@ -425,7 +415,18 @@ export default function ProcessesTab() {
                             {detail}
                           </span>
                         ) : (
-                          <span style={{ color: "var(--text-secondary)", fontSize: 10 }}>—</span>
+                          <span style={{ color: "var(--text-secondary)", fontSize: 10, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                            —
+                            {proc.process_type.toLowerCase().startsWith("renderer") && (
+                              <Tooltip
+                                content="No URL available. Launch Edge with Remote Debugging (CDP) enabled to populate tab URLs. You can add --remote-debugging-port=9222 manually when launching Edge from the command line, or use the Launcher tab's CDP toggle."
+                                relationship="description"
+                                positioning="below"
+                              >
+                                <QuestionCircleFilled style={{ fontSize: 12, color: "#888", cursor: "help" }} />
+                              </Tooltip>
+                            )}
+                          </span>
                         )}
                       </td>
                       {showArgs && (

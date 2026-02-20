@@ -16,6 +16,7 @@ import {
   ChevronDownFilled,
   ChevronRightFilled,
 } from "@fluentui/react-icons";
+import StatusBar from "../components/StatusBar";
 
 interface ScheduleConfig {
   enabled: boolean;
@@ -317,19 +318,7 @@ export default function ScriptsTab() {
         </Button>
       </div>
 
-      {statusMsg && (
-        <div className="card" style={{ marginBottom: 12 }}>
-          <span>{statusMsg}</span>
-          <Button
-            appearance="subtle"
-            size="small"
-            onClick={() => setStatusMsg("")}
-            style={{ marginLeft: 8 }}
-          >
-            Dismiss
-          </Button>
-        </div>
-      )}
+      <StatusBar message={statusMsg} tab="Scripts" onDismiss={() => setStatusMsg("")} />
 
       {/* Script editor dialog */}
       {editing && (

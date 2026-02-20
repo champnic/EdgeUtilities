@@ -20,6 +20,7 @@ import {
   ArrowDownloadFilled,
   SearchFilled,
 } from "@fluentui/react-icons";
+import StatusBar from "../components/StatusBar";
 
 interface OutDir {
   name: string;
@@ -366,19 +367,7 @@ export default function ReposTab() {
         </h2>
       </div>
 
-      {statusMsg && (
-        <div className="card" style={{ marginBottom: 12 }}>
-          <span style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>{statusMsg}</span>
-          <Button
-            appearance="subtle"
-            size="small"
-            onClick={() => setStatusMsg("")}
-            style={{ marginLeft: 8 }}
-          >
-            Dismiss
-          </Button>
-        </div>
-      )}
+      <StatusBar message={statusMsg} tab="Repos" onDismiss={() => setStatusMsg("")} />
 
       {/* Add repo */}
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -486,7 +475,12 @@ export default function ReposTab() {
                 </span>
               )}
               {state.branch && (
-                <span style={{ fontSize: 14, fontWeight: 600, color: "#4fc3f7", fontFamily: "monospace" }}>
+                <span style={{
+                  fontSize: 14,
+                  fontWeight: 600,
+                  color: /rebase|merge|cherry-pick|revert|bisect|detached/i.test(state.branch) ? "#ff9800" : "#4fc3f7",
+                  fontFamily: "monospace",
+                }}>
                   {state.branch}
                 </span>
               )}

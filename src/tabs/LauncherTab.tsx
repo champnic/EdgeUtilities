@@ -13,6 +13,7 @@ import {
   DialogBody,
   DialogActions,
   DialogContent,
+  Tooltip,
 } from "@fluentui/react-components";
 import {
   RocketFilled,
@@ -21,7 +22,9 @@ import {
   ArrowSyncFilled,
   SaveFilled,
   FolderAddFilled,
+  QuestionCircleFilled,
 } from "@fluentui/react-icons";
+import StatusBar from "../components/StatusBar";
 
 const STORAGE_KEY_REMOTE_DEBUG = "edge-utils-launcher-remote-debug";
 
@@ -41,6 +44,7 @@ interface LaunchPreset {
 }
 
 interface RepoBuild {
+  repo_path: string;
   out_dir: string;
   exe_path: string;
   last_modified: string;
@@ -73,11 +77,15 @@ export default function LauncherTab() {
   async function loadData() {
     setLoading(true);
     try {
-      const [installsData, presetsData, repoBuildsData] = await Promise.all([
+      const [installsData, presetsData] = await Promise.all([
         invoke<EdgeInstall[]>("get_edge_installs"),
         invoke<LaunchPreset[]>("get_common_flags"),
-        invoke<RepoBuild[]>("get_repo_builds", { repoPaths: ["d:\\edge\\src3"] }).catch(() => []),
       ]);
+
+      // Load repo list from config, then scan for msedge.exe builds
+      const configDir = await getConfigDir();
+      const repoPaths = await invoke<string[]>("load_repo_list", { configDir }).catch(() => []);
+      const repoBuildsData = await invoke<RepoBuild[]>("get_repo_builds", { repoPaths }).catch(() => []);
       setInstalls(installsData.filter((i) => i.installed));
       setCommonPresets(presetsData);
       setRepoBuilds(repoBuildsData);
@@ -86,7 +94,6 @@ export default function LauncherTab() {
       }
 
       // Load saved presets
-      const configDir = await getConfigDir();
       const saved = await invoke<LaunchPreset[]>("load_presets", { configDir }).catch(() => []);
       setSavedPresets(saved);
     } catch (err) {
@@ -205,7 +212,7 @@ export default function LauncherTab() {
       value: i.exe_path,
     })),
     ...repoBuilds.map((b) => ({
-      label: `Build: ${b.out_dir} (${b.last_modified})`,
+      label: `Build: ${b.repo_path}\\out\\${b.out_dir} (${b.last_modified})`,
       value: b.exe_path,
     })),
   ];
@@ -216,19 +223,7 @@ export default function LauncherTab() {
     <div>
       <h2 className="section-title">Launch Edge</h2>
 
-      {statusMsg && (
-        <div className="card" style={{ marginBottom: 12 }}>
-          <span>{statusMsg}</span>
-          <Button
-            appearance="subtle"
-            size="small"
-            onClick={() => setStatusMsg("")}
-            style={{ marginLeft: 8 }}
-          >
-            Dismiss
-          </Button>
-        </div>
-      )}
+      <StatusBar message={statusMsg} tab="Launcher" onDismiss={() => setStatusMsg("")} />
 
       {/* Target Browser */}
       <div className="card">
@@ -263,15 +258,24 @@ export default function LauncherTab() {
       <div className="card">
         <div className="card-header">
           <h3>Quick Presets</h3>
-          <Switch
-            checked={remoteDebugging}
-            onChange={(_e, data) => {
-              setRemoteDebugging(data.checked);
-              localStorage.setItem(STORAGE_KEY_REMOTE_DEBUG, String(data.checked));
-            }}
-            label="Remote Debugging (CDP)"
-            style={{ fontSize: 11 }}
-          />
+          <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+            <Switch
+              checked={remoteDebugging}
+              onChange={(_e, data) => {
+                setRemoteDebugging(data.checked);
+                localStorage.setItem(STORAGE_KEY_REMOTE_DEBUG, String(data.checked));
+              }}
+              label="Remote Debugging (CDP)"
+              style={{ fontSize: 11 }}
+            />
+            <Tooltip
+              content="Launches Edge with --remote-debugging-port=9222. Required for the Processes tab to discover and display open tab URLs."
+              relationship="description"
+              positioning="below"
+            >
+              <QuestionCircleFilled style={{ fontSize: 14, color: "#888", cursor: "help" }} />
+            </Tooltip>
+          </div>
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
           {commonPresets.map((preset, i) => {

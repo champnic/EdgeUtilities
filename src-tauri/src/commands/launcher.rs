@@ -10,6 +10,7 @@ pub struct LaunchPreset {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RepoBuild {
+    pub repo_path: String,
     pub out_dir: String,
     pub exe_path: String,
     pub last_modified: String,
@@ -117,6 +118,7 @@ pub fn get_repo_builds(repo_paths: Vec<String>) -> Result<Vec<RepoBuild>, String
                         .unwrap_or_else(|_| "Unknown".to_string());
 
                     builds.push(RepoBuild {
+                        repo_path: repo_path.clone(),
                         out_dir: entry.file_name().to_string_lossy().to_string(),
                         exe_path: exe.to_string_lossy().to_string(),
                         last_modified,

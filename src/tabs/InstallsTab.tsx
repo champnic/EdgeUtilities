@@ -20,6 +20,7 @@ import {
   RocketFilled,
   OpenFilled,
 } from "@fluentui/react-icons";
+import StatusBar from "../components/StatusBar";
 
 interface EdgeInstall {
   channel: string;
@@ -143,19 +144,7 @@ export default function InstallsTab() {
         </Button>
       </div>
 
-      {statusMsg && (
-        <div className="card" style={{ marginBottom: 12 }}>
-          <span>{statusMsg}</span>
-          <Button
-            appearance="subtle"
-            size="small"
-            onClick={() => setStatusMsg("")}
-            style={{ marginLeft: 8 }}
-          >
-            Dismiss
-          </Button>
-        </div>
-      )}
+      <StatusBar message={statusMsg} tab="Installs" onDismiss={() => setStatusMsg("")} />
 
       <table className="data-table">
         <thead>
