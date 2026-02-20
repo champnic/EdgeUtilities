@@ -23,15 +23,11 @@ jobs:
         with:
           node-version: 20
 
-      - name: Delete auto-created release
-        run: gh release delete ${{ github.ref_name }} --yes || true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Install dependencies
         run: npm install
 
       - name: Build Tauri app
+        id: tauri
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -41,5 +37,10 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "Edge Utilities ${{ github.ref_name }}"
           releaseBody: "See the assets below to download and install this version."
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
+
+      - name: Publish release
+        run: gh release edit ${{ github.ref_name }} --draft=false
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
