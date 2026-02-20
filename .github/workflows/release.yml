@@ -23,6 +23,11 @@ jobs:
         with:
           node-version: 20
 
+      - name: Delete auto-created release
+        run: gh release delete ${{ github.ref_name }} --yes || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Install dependencies
         run: npm install
 
