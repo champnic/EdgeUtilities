@@ -36,10 +36,19 @@ pub fn get_common_flags() -> Vec<LaunchPreset> {
     vec![
         LaunchPreset {
             name: "No First Run".to_string(),
-            flags: vec![
-                "--no-first-run".to_string(),
-                "--no-default-browser-check".to_string(),
-            ],
+            flags: vec!["--no-first-run".to_string()],
+        },
+        LaunchPreset {
+            name: "No Browser Check".to_string(),
+            flags: vec!["--no-default-browser-check".to_string()],
+        },
+        LaunchPreset {
+            name: "No Default Apps".to_string(),
+            flags: vec!["--disable-default-apps".to_string()],
+        },
+        LaunchPreset {
+            name: "No Sync".to_string(),
+            flags: vec!["--disable-sync".to_string()],
         },
         LaunchPreset {
             name: "Disable GPU".to_string(),

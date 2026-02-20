@@ -89,6 +89,15 @@ export default function LauncherTab() {
       setInstalls(installsData.filter((i) => i.installed));
       setCommonPresets(presetsData);
       setRepoBuilds(repoBuildsData);
+
+      // Auto-activate default clean-launch presets, including a temp profile
+      const defaultFlags = ["--no-first-run", "--no-default-browser-check", "--disable-default-apps", "--disable-sync"];
+      try {
+        const dir = await invoke<string>("create_temp_user_data_dir");
+        defaultFlags.push(`--user-data-dir=${dir}`);
+      } catch { /* ignore */ }
+      setActiveFlags(defaultFlags);
+
       if (installsData.filter((i) => i.installed).length > 0) {
         setSelectedExe(installsData.filter((i) => i.installed)[0].exe_path);
       }
@@ -127,13 +136,21 @@ export default function LauncherTab() {
     setActiveFlags(activeFlags.filter((f) => f !== flag));
   }
 
-  async function handleCreateTempProfile() {
-    try {
-      const dir = await invoke<string>("create_temp_user_data_dir");
-      setActiveFlags([...activeFlags, `--user-data-dir=${dir}`]);
-      setStatusMsg(`Created temp profile: ${dir}`);
-    } catch (err) {
-      setStatusMsg(`Error: ${err}`);
+  async function handleToggleTempProfile() {
+    const hasUserDataDir = activeFlags.some((f) => f.startsWith("--user-data-dir="));
+    if (hasUserDataDir) {
+      // Remove existing --user-data-dir flag
+      setActiveFlags(activeFlags.filter((f) => !f.startsWith("--user-data-dir=")));
+      setStatusMsg("Temp profile removed");
+    } else {
+      // Create a new temp dir and add it
+      try {
+        const dir = await invoke<string>("create_temp_user_data_dir");
+        setActiveFlags([...activeFlags, `--user-data-dir=${dir}`]);
+        setStatusMsg(`Created temp profile: ${dir}`);
+      } catch (err) {
+        setStatusMsg(`Error: ${err}`);
+      }
     }
   }
 
@@ -291,8 +308,8 @@ export default function LauncherTab() {
             );
           })}
           <div
-            className="flag-chip"
-            onClick={handleCreateTempProfile}
+            className={`flag-chip ${activeFlags.some((f) => f.startsWith("--user-data-dir=")) ? "selected" : ""}`}
+            onClick={handleToggleTempProfile}
             title="Create a random temp profile directory"
           >
             <FolderAddFilled style={{ fontSize: 14 }} />

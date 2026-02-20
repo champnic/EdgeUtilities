@@ -19,6 +19,7 @@ import {
   ReOrderFilled,
   ArrowDownloadFilled,
   SearchFilled,
+  RocketFilled,
 } from "@fluentui/react-icons";
 import StatusBar from "../components/StatusBar";
 
@@ -26,6 +27,7 @@ interface OutDir {
   name: string;
   path: string;
   has_args_gn: boolean;
+  has_msedge: boolean;
 }
 
 interface CommitInfo {
@@ -85,6 +87,17 @@ export default function ReposTab() {
     loadRepoList();
     invoke<string[]>("get_common_build_targets").then(setBuildTargets).catch(() => {});
   }, []);
+
+  // Auto-refresh git status every 60 seconds
+  useEffect(() => {
+    if (repoPaths.length === 0) return;
+    const interval = setInterval(() => {
+      for (const p of repoPaths) {
+        loadRepoInfo(p);
+      }
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, [repoPaths]);
 
   async function loadRepoList() {
     try {
@@ -541,7 +554,6 @@ export default function ReposTab() {
                           <thead>
                             <tr>
                               <th>Name</th>
-                              <th>args.gn</th>
                               <th>Actions</th>
                             </tr>
                           </thead>
@@ -549,12 +561,35 @@ export default function ReposTab() {
                             {state.info.out_dirs.map((dir, i) => (
                               <tr key={i}>
                                 <td style={{ fontFamily: "monospace", fontSize: 12 }}>{dir.name}</td>
-                                <td>
-                                  <span className={`badge ${dir.has_args_gn ? "success" : "error"}`}>
-                                    {dir.has_args_gn ? "Yes" : "No"}
-                                  </span>
-                                </td>
                                 <td style={{ whiteSpace: "nowrap" }}>
+                                  {dir.has_msedge && (
+                                    <Button
+                                      appearance="subtle"
+                                      icon={<RocketFilled />}
+                                      size="small"
+                                      onClick={async () => {
+                                        try {
+                                          const exePath = dir.path + "\\msedge.exe";
+                                          const tempDir = await invoke<string>("create_temp_user_data_dir");
+                                          const flags = [
+                                            `--user-data-dir=${tempDir}`,
+                                            "--no-first-run",
+                                            "--no-default-browser-check",
+                                            "--disable-default-apps",
+                                            "--disable-sync",
+                                            "--remote-debugging-port=9222",
+                                          ];
+                                          const result = await invoke<string>("launch_edge", { exePath, flags });
+                                          setStatusMsg(result);
+                                        } catch (err) {
+                                          setStatusMsg(`Error: ${err}`);
+                                        }
+                                      }}
+                                      title="Launch msedge.exe with temp profile and default flags"
+                                    >
+                                      Launch
+                                    </Button>
+                                  )}
                                   {dir.has_args_gn && (
                                     <Button
                                       appearance="subtle"

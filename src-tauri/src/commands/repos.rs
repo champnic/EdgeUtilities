@@ -18,6 +18,7 @@ pub struct OutDir {
     pub name: String,
     pub path: String,
     pub has_args_gn: bool,
+    pub has_msedge: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -515,10 +516,12 @@ fn find_out_dirs(repo_path: &Path) -> Vec<OutDir> {
                 let path = entry.path();
                 if path.is_dir() {
                     let has_args = path.join("args.gn").exists();
+                    let has_msedge = path.join("msedge.exe").exists();
                     dirs.push(OutDir {
                         name: entry.file_name().to_string_lossy().to_string(),
                         path: path.to_string_lossy().to_string(),
                         has_args_gn: has_args,
+                        has_msedge,
                     });
                 }
             }
@@ -559,9 +562,11 @@ fn get_recent_commits(repo_path: &Path, count: usize) -> Vec<CommitInfo> {
 
 /// Find the index of the merge-base commit with main/master in the recent commits list.
 fn find_merge_base_index(repo_path: &Path, commits: &[CommitInfo]) -> Option<usize> {
-    // Try main first, then master
+    // Try local main, origin/main, local master, origin/master
     let merge_base_hash = run_git(repo_path, &["merge-base", "HEAD", "main"])
+        .or_else(|_| run_git(repo_path, &["merge-base", "HEAD", "origin/main"]))
         .or_else(|_| run_git(repo_path, &["merge-base", "HEAD", "master"]))
+        .or_else(|_| run_git(repo_path, &["merge-base", "HEAD", "origin/master"]))
         .ok()?
         .trim()
         .to_string();
