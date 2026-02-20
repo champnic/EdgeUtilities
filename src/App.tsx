@@ -15,6 +15,7 @@ import {
   BranchForkFilled,
   ScriptFilled,
   ArrowDownloadFilled,
+  InfoFilled,
 } from "@fluentui/react-icons";
 import { useState, useEffect } from "react";
 import { check, Update } from "@tauri-apps/plugin-updater";
@@ -26,8 +27,9 @@ import ProcessesTab from "./tabs/ProcessesTab";
 import LauncherTab from "./tabs/LauncherTab";
 import ReposTab from "./tabs/ReposTab";
 import ScriptsTab from "./tabs/ScriptsTab";
+import AboutTab from "./tabs/AboutTab";
 
-type TabId = "installs" | "processes" | "launcher" | "repos" | "scripts";
+type TabId = "installs" | "processes" | "launcher" | "repos" | "scripts" | "about";
 
 function App() {
   const [selectedTab, setSelectedTab] = useState<TabId>("installs");
@@ -90,6 +92,9 @@ function App() {
             <Tab value="scripts" icon={<ScriptFilled />}>
               Scripts
             </Tab>
+            <Tab value="about" icon={<InfoFilled />}>
+              About
+            </Tab>
           </TabList>
           {updateAvailable && (
             <div style={{ paddingRight: 12, display: "flex", alignItems: "center", gap: 6 }}>
@@ -111,6 +116,7 @@ function App() {
           {selectedTab === "launcher" && <LauncherTab />}
           {selectedTab === "repos" && <ReposTab />}
           {selectedTab === "scripts" && <ScriptsTab />}
+          {selectedTab === "about" && <AboutTab />}
         </div>
       </div>
     </FluentProvider>
