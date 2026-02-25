@@ -20,6 +20,7 @@ import {
   ArrowDownloadFilled,
   SearchFilled,
   RocketFilled,
+  CodeFilled,
 } from "@fluentui/react-icons";
 import StatusBar from "../components/StatusBar";
 
@@ -511,6 +512,18 @@ export default function ReposTab() {
                     .catch((err) => setStatusMsg(`Error: ${err}`));
                 }}
                 title="gclient sync -f -D"
+              />
+              <Button
+                appearance="subtle"
+                icon={<CodeFilled />}
+                size="small"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  invoke("open_in_vscode", { repoPath })
+                    .then(() => setStatusMsg("Opening VS Code..."))
+                    .catch((err) => setStatusMsg(`Error opening VS Code: ${err}`));
+                }}
+                title="Open in VS Code"
               />
               <Button
                 appearance="subtle"

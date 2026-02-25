@@ -408,6 +408,53 @@ pub fn save_repo_list(config_dir: String, repos: Vec<String>) -> Result<(), Stri
     std::fs::write(&path, content).map_err(|e| e.to_string())
 }
 
+/// Open VS Code for a repo. Checks the repo folder and its parent for a *.code-workspace file.
+/// If found, opens that workspace. Otherwise falls back to opening the repo folder directly.
+#[tauri::command]
+pub fn open_in_vscode(repo_path: String) -> Result<(), String> {
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let repo = PathBuf::from(&repo_path);
+
+    // Search for a *.code-workspace file in the repo folder and its parent
+    let mut search_dirs = vec![repo.clone()];
+    if let Some(parent) = repo.parent() {
+        search_dirs.push(parent.to_path_buf());
+    }
+
+    let mut workspace_file: Option<PathBuf> = None;
+    for dir in &search_dirs {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(ext) = path.extension() {
+                        if ext == "code-workspace" {
+                            workspace_file = Some(path);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if workspace_file.is_some() {
+            break;
+        }
+    }
+
+    let target = match &workspace_file {
+        Some(ws) => ws.to_string_lossy().to_string(),
+        None => repo_path.clone(),
+    };
+
+    Command::new("cmd")
+        .args(["/c", "code", &target])
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map_err(|e| format!("Failed to open VS Code: {}", e))?;
+
+    Ok(())
+}
+
 /// Open Edge dev environment terminal (runs initEdgeEnv.cmd)
 #[tauri::command]
 pub fn open_edge_dev_env(repo_path: String) -> Result<(), String> {

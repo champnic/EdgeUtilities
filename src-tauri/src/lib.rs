@@ -38,6 +38,7 @@ pub fn run() {
             get_repo_branch,
             get_repo_info,
             get_common_build_targets,
+            open_in_vscode,
             open_edge_dev_env,
             run_gclient_sync,
             create_out_dir,
