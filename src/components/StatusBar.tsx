@@ -1,5 +1,10 @@
 import { Button } from "@fluentui/react-components";
-import { BugFilled } from "@fluentui/react-icons";
+import {
+  BugFilled,
+  InfoFilled,
+  ErrorCircleFilled,
+  DismissRegular,
+} from "@fluentui/react-icons";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 const ISSUES_URL = "https://github.com/champnic/EdgeUtilities/issues/new";
@@ -30,17 +35,16 @@ export default function StatusBar({ message, tab, onDismiss, style }: StatusBarP
 
   return (
     <div
-      className="card"
-      style={{
-        marginBottom: 12,
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        ...(isError ? { borderColor: "var(--danger, #f44336)" } : {}),
-        ...style,
-      }}
+      className={`status-bar ${isError ? "status-bar--error" : ""}`}
+      style={style}
     >
-      <span style={{ flex: 1, whiteSpace: "pre-wrap", fontSize: 12 }}>{message}</span>
+      <span className={`status-bar__icon ${isError ? "status-bar__icon--error" : "status-bar__icon--info"}`}>
+        {isError ? <ErrorCircleFilled /> : <InfoFilled />}
+      </span>
+      <span className={`status-bar__label ${isError ? "status-bar__label--error" : "status-bar__label--info"}`}>
+        {isError ? "Error" : "Log"}
+      </span>
+      <span className="status-bar__message">{message}</span>
       {isError && (
         <Button
           appearance="subtle"
@@ -55,10 +59,10 @@ export default function StatusBar({ message, tab, onDismiss, style }: StatusBarP
       <Button
         appearance="subtle"
         size="small"
+        icon={<DismissRegular />}
         onClick={onDismiss}
-      >
-        Dismiss
-      </Button>
+        title="Dismiss"
+      />
     </div>
   );
 }
