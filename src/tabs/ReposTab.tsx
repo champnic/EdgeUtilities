@@ -13,11 +13,11 @@ import {
   AddFilled,
   DocumentTextFilled,
   DeleteFilled,
+  DismissCircleFilled,
   ChevronDownFilled,
   ChevronRightFilled,
   WindowConsoleFilled,
   ReOrderFilled,
-  ArrowDownloadFilled,
   SearchFilled,
   RocketFilled,
   CodeFilled,
@@ -89,14 +89,14 @@ export default function ReposTab() {
     invoke<string[]>("get_common_build_targets").then(setBuildTargets).catch(() => {});
   }, []);
 
-  // Auto-refresh git status every 60 seconds
+  // Auto-refresh git status every 5 minutes
   useEffect(() => {
     if (repoPaths.length === 0) return;
     const interval = setInterval(() => {
       for (const p of repoPaths) {
         loadRepoInfo(p);
       }
-    }, 60_000);
+    }, 300_000);
     return () => clearInterval(interval);
   }, [repoPaths]);
 
@@ -503,7 +503,7 @@ export default function ReposTab() {
               )}
               <Button
                 appearance="subtle"
-                icon={<ArrowDownloadFilled />}
+                icon={<ArrowSyncFilled />}
                 size="small"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -534,17 +534,15 @@ export default function ReposTab() {
               />
               <Button
                 appearance="subtle"
-                icon={<ArrowSyncFilled />}
+                icon={<DismissCircleFilled style={{ color: "var(--danger)" }} />}
                 size="small"
-                onClick={(e) => { e.stopPropagation(); loadRepoInfo(repoPath); }}
-                title="Refresh"
-              />
-              <Button
-                appearance="subtle"
-                icon={<DeleteFilled />}
-                size="small"
-                onClick={(e) => { e.stopPropagation(); removeRepo(repoPath); }}
-                title="Remove repo"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (confirm(`Remove "${repoPath}" from the list? No files will be deleted.`)) {
+                    removeRepo(repoPath);
+                  }
+                }}
+                title="Remove from list"
               />
             </div>
 
@@ -624,7 +622,7 @@ export default function ReposTab() {
                                   </Button>
                                   <Button
                                     appearance="subtle"
-                                    icon={<DeleteFilled />}
+                                    icon={<DeleteFilled style={{ color: "var(--danger)" }} />}
                                     size="small"
                                     onClick={async () => {
                                       if (!confirm(`Delete out folder "${dir.name}"? This cannot be undone.`)) return;
