@@ -346,7 +346,7 @@ export default function ReposTab() {
     }
     setCreatingOutDir(true);
     try {
-      const outPath = newOutPath || `out/${newOutConfig}`;
+      const outPath = (newOutPath || newOutConfig).replace(/^out[\\/]/, "");
       const result = await invoke<string>("create_out_dir", {
         repoPath,
         configName: newOutConfig,
